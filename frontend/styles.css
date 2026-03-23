@@ -1,0 +1,103 @@
+body{
+    margin: 0;
+    background: #0f172a;
+    color: white;
+    font-family: 'Segoe UI', sans-serif;
+}
+
+#chat-container{
+    width: 500px;
+    margin: auto;
+    margin-top: 40px;
+    display: flex;
+    flex-direction: column;
+}
+
+#messages{
+    height: 500px;
+    overflow-y: auto;
+    border: 1px solid #1e293b;
+    padding: 15px;
+    border-radius: 10px;
+    background: #020617;
+}
+
+/*Message bubbles*/
+.message{
+    max-width: 75%;
+    padding: 10px 14px;
+    margin: 8px 0;
+    border-radius: 12px;
+    line-height: 1.4;
+    font-size: 14px;
+    animation: fadeIn 0.2s ease-in;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+@keyframes fadeIn{
+    from {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+    to{
+        opcaity: 1;
+        transform: translateY(0);
+    }
+}
+
+/*THinking animation*/
+.ai:empty::after{
+    content: "Thinking...";
+    opacity: 0.6s;
+    animation: blink 1s infinite;
+}
+
+@keyframes blink{
+    50%{
+        opacity: 0.2;
+    }
+}
+.user{
+    background: #2563eb;
+    align-self: flex-end;
+    text-align: right;
+    margin: 5px;
+}
+
+.ai{
+    background: #1e293b;
+    align-self: flex-start;
+    text-align: left;
+    margin: 5px;
+    color: #38bdf8;
+}
+
+/*Input */
+
+#input-area{
+    display: flex;
+    margin-top: 10px;
+}
+
+input{
+    flex: 1;
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    outline: none;
+}
+
+button{
+    margin-left: 8px;
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    background: #2563eb;
+    cursor: pointer;
+}
+
+button:disabled{
+    background: #64748b;
+    cursor: not-allowed;
+}
