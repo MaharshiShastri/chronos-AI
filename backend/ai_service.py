@@ -53,44 +53,20 @@ def generate_stream(prompt: str):
                 "prompt": prompt,
                 "stream": True
             },
-            timeout=1800,
+            timeout=180,
             stream=True
         )
-        buffer = ""
-        for chunk in response.iter_content(chunk_size=1024):
-            if chunk:
-                try:
-                    data = chunk.decode("utf-8")
-                    for line in data.splitlines():
-                        if not line.strip():
-                            continue
+        for line in response.iter_lines():
+            if line:
+                data = json.loads(line.decode("utf-8"))
+                token = data.get("response", "")
+                yield token
 
-                        buffer += chunk.decode("utf-8")
-
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-
-                            if not line.strip():
-                                continue
-                            
-                        print(line)
-                        json_data = json.loads(line)
-                        yield json_data.get("response", "")
-
-                except Exception as e:
-                    print("JSON Error:", e)
-                    continue
-            
-        if(response.status_code == 200):
-            data = response.json()
-            return data.get("response", "No response field in the API response.")
-        
-        else:
-            return f"error: {response.status_code} - {response.text}"
-        
-    except requests.exceptions.RequestException as e:
-        return "Error: Model took too long to respond."
-    
+                if data.get("done"):
+                    return
+                
+                    
     except Exception as e:
-        return f"Error: {str(e)}"
+        print("STREAM ERROR:", str(e))
+        yield "[ERROR]"
     

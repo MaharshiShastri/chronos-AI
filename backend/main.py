@@ -1,35 +1,91 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from database import SessionLocal
-from schemas import ChatRequest, ChatResponse
+from schemas import ChatRequest, ChatResponse, UserAuth
 from ai_service import generate_response, generate_stream
 from zoneinfo import ZoneInfo
 import models
 from database import Base, engine
 from fastapi.responses import StreamingResponse
+import json
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer
+from auth import hash_password, verify_password, create_access_token, SECRET_KEY, ALGORITHM
+from jose import jwt, JWTError
 
-
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl = "login")
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:8000", "http://localhost:8000", "http://localhost:5500"],
     allow_credentials = True,
     allow_methods = ["*"],
     allow_headers = ["*"],
 )
+
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
-
+# WARNING: This deletes everything every time the server restarts!
+# Useful only during heavy development/debugging, do not unnecessarily un-comment the next line.
+#Base.metadata.drop_all(bind=engine)
 Base.metadata.create_all(bind=engine)
+
 @app.get("/")
 def root():
     return {"message": "AI Backend Running"}
+
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code = status.HTTP_401_UNAUTHORIZED,
+        detail = "Could not validate credentials",
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    user = db.query(models.User).filter(models.User.email == email).first()
+
+    if user is None:
+        raise credentials_exception
+    
+    return user
+
+
+@app.post("/signup")
+def signup(request: UserAuth, db: Session = Depends(get_db)):
+
+    existing_user = db.query(models.User).filter(models.User.email == request.email).first()
+
+    if existing_user:
+        raise HTTPException(status_code=400, detail= "Email already registered")
+    hashed_password = hash_password(request.password)
+    new_user = models.User(
+        email = request.email,
+        password_hash = hashed_password
+    )
+
+    db.add(new_user)
+    db.commit()
+    return {"message" : "User created successfully!"}
+
+@app.post("/login")
+def login(request: UserAuth, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == request.email).first()
+
+    if not user or not verify_password(request.password, user.password_hash):
+        raise HTTPException(status_code = 401, detail = "Invalid Credentials!")
+    
+    access_token = create_access_token(data={"sub": user.email})
+    return ({"access_token": access_token, "token_type": "bearer", "user": {"id": user.id,  "email": user.email}})
 
 @app.post("/chat")
 def chat(request: ChatRequest, db: Session = Depends(get_db)):
@@ -64,7 +120,7 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         if msg.role == "user":
             history_txt += f"User: {msg.content}\n"
         else:
-            history_txt = f"AI: {msg.content}\n"
+            history_txt += f"AI: {msg.content}\n"
 
     full_prompt = history_txt + f"User: {request.message}\nAssistant:"
     #GEnerate AI reply
@@ -85,7 +141,7 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
 @app.get("/conversation/{conversation_id}")
 def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
 
-    messages = db.query(models.Message).filter(models.Message.id == conversation_id).order_by(models.Message.timestamp).all()
+    messages = db.query(models.Message).filter(models.Message.conversation_id == conversation_id).order_by(models.Message.timestamp).all()
 
     return [
         {
@@ -97,8 +153,8 @@ def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
     ]
 
 @app.post("/chat-stream")
-def chat_stream(request: ChatRequest, db: Session = Depends(get_db)):
-    user_id = 1
+def chat_stream(request: ChatRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    user_id = current_user.id
 
     if request.conversation_id:
         conversation = db.query(models.Conversation).filter(models.Conversation.id == request.conversation_id).first()
@@ -130,13 +186,13 @@ def chat_stream(request: ChatRequest, db: Session = Depends(get_db)):
         try:
             for token in generate_stream(full_prompt):
                 ai_response += token
-                print(repr(token))
-                yield token
+                yield f"data: {json.dumps({'token': token})}\n\n"
+            
+            yield f"data: {json.dumps({'conversation_id': conversation.id})}\n\n"
 
-            print("Done streaming")
         except Exception as e:
             print("ERROR IN STREAMING: ", str(e))
-            yield b"\[ERROR]\n"
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
         finally:
             try:
                 ai_msg = models.Message(
@@ -153,3 +209,4 @@ def chat_stream(request: ChatRequest, db: Session = Depends(get_db)):
 
         
     return StreamingResponse(stream(), media_type="text/plain")
+
