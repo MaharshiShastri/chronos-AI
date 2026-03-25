@@ -51,15 +51,15 @@ Key features:
 
 ## ⚙️ System Architecture
   Frontend (JS UI)
-      ↓
+      ->
   FastAPI Backend
-      ↓
+      ->
   Auth Layer (JWT)
-      ↓
+      ->
   Conversation Engine
-      ↓
+      ->
   Ollama API (TinyLlama)
-      ↓
+      ->
   PostgreSQL (Memory Storage)
 ---
 
