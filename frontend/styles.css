@@ -140,10 +140,13 @@ button:active {
 }
 
 .cube-container{
-    width: 100px;
-    height: 100px;
-    perspective: 600px;
-    margin-bottom: 50px;
+    width: 120px;
+    height: 120px;
+    perspective: 1000px;
+    margin: 50px auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
 
 .cube{
@@ -151,13 +154,14 @@ button:active {
     height: 100%;
     position: relative;
     transform-style: preserve-3d;
-    animation: rotateCube 4s infinite linear;
-}
+    animation: rotateCube 12s infinite linear;
+    margin: 0 auto;
+} 
 
 .face {
-    position: absolute; width: 100px; height: 100px; background: rgba(56, 189, 248, 0.1);
+    position: absolute; width: 120px; height: 120px; background: rgba(16, 189, 248, 0.1);
     border: 2px solid var(--neon-blue); display: flex; align-items: center;
-    justify-content: center; font-size: 12px; color: var(--neon-blue);
+    justify-content: center; font-size: 12px; color: var(--neon-blue); overflow: hidden;
 }
 
 .front  { transform: translateZ(50px); }
@@ -172,4 +176,87 @@ button:active {
     to { transform: rotateX(360deg) rotateY(360deg); }
 }
 
-.loader-text { color: #10b981; font-family: monospace; letter-spacing: 2px; margin-top: 20px; }
+.loader-text { 
+    color: #10b981; 
+    font-family: monospace; 
+    letter-spacing: 2px; 
+    margin-top: 20px; 
+    width: 100%;
+    text-align: center;
+}
+
+.side-bar h3{
+    font-size: 0.7rem;
+    color: #64748b;
+    margin-bottom: 1rem;
+    letter-spacing: 2px;
+}
+
+.history-item{
+    padding: 10px;
+    background: #1e293b;
+    border-radius: 8px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: 0.3s;
+    margin-bottom: 5px;
+}
+
+.history-item:hover{
+    border-color:var(--neon-blue);
+    background: #1e293b;
+}
+
+#loader-view{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px 0;
+}
+
+.cube-success .face{
+    border-color: #10b981 !important;
+    color: #10b981 !important;
+    background: rgba(16, 185, 129, 0.1) !important;
+}
+
+#stop-btn{
+    width: auto;
+    background: #7f1d1d;
+    color: white;
+    margin-left: 10px;
+}
+
+.header-zone.loading h1{color: #10b981;}
+.header-zone.loading .status-dot{background: #10b981; box-shadow: 0 0 10px #10b981;}
+
+.loader-modal{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    text-align: center;
+    padding: 20px 0;
+}
+.cube.shattered .face {
+    opacity: 0;
+    transition: transform 0.8s cubic-bezier(0.17, 0.89, 0.32, 1.49), opacity 0.8s;
+}
+
+/* Define where each face flies to */
+.cube.shattered .front  { transform: translateZ(400px) scale(0); }
+.cube.shattered .back   { transform: rotateY(180deg) translateZ(400px) scale(0); }
+.cube.shattered .right  { transform: rotateY(90deg) translateZ(400px) scale(0); }
+.cube.shattered .left   { transform: rotateY(-90deg) translateZ(400px) scale(0); }
+.cube.shattered .top    { transform: rotateX(90deg) translateZ(400px) scale(0); }
+.cube.shattered .bottom { transform: rotateX(-90deg) translateZ(400px) scale(0); }
+
+/* Faster spinning for the "pre-explosion" tension */
+.cube.spinning-fast {
+    animation: rotateCube 0.5s infinite linear !important;
+}
+.message.user { align-self: flex-end; background: #2563eb; color: white; border-bottom-right-radius: 2px; }
+.message.ai { align-self: flex-start; background: var(--card-bg); border-bottom-left-radius: 0; border: 1px solid #334155; color: var(--neon-blue); }
