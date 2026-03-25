@@ -98,7 +98,10 @@ Key features:
 A working demonstration of the system has been recorded.
 
 📹 **Video Proof:**  
-https://github.com/user-attachments/assets/65408549-ef20-4c2f-a678-dc8041749aa7
+
+https://github.com/user-attachments/assets/284a965f-9619-4349-8cd9-851e745d43bf
+
+
 
 This demonstrates:
 - Authentication flow  
@@ -140,6 +143,7 @@ app.js
   uvicorn backend.main:app --reload
 5. Run Frontend
   CMD and cd to frontend\: python -m http.server 5500
+  
 📌 Current Status
   Authentication system
   Chat + streaming
@@ -147,6 +151,7 @@ app.js
   Frontend UI/UX
   Multi-session management (enhanced)
   Model optimization
+  
 Deployment
 🔮 Future Work
 🧠 Fine-tuned models / better LLM integration
