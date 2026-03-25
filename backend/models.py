@@ -13,7 +13,7 @@ class User(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     timezone_name = Column(String, default="UTC")
 
-    conversations = relationship("Conversation", back_populates="user")
+    conversations = relationship("Conversation", back_populates="owner")
 
     def get_local_time(self, dt):
         try:
@@ -29,9 +29,10 @@ class Conversation(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    title = Column(String, default="New Session")
 
-    user = relationship("User", back_populates="conversations")
-    messages = relationship("Message", back_populates="conversation")
+    owner = relationship("User", back_populates="conversations")
+    messages = relationship("Message", back_populates="conversation", cascade="all, delete")
 
 class Message(Base):
     __tablename__ = "messages"
