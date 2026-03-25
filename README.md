@@ -127,19 +127,15 @@ app.js
 ## ⚙️ Setup Instructions
 
 ### 1. Clone Repository
-  git clone [https://github.com/MaharshiShastri/local-llm-fullStack.git](https://github.com/MaharshiShastri/local-llm-fullStack.git) \
-  cd local-llm-fullStack 
+  git clone [https://github.com/MaharshiShastri/local-llm-fullStack.git](https://github.com/MaharshiShastri/local-llm-fullStack.git)  cd local-llm-fullStack 
 ### 2. Backend Setup
-  Install dependencies\  
-  pip install fastapi uvicorn sqlalchemy psycopg2 passlib python-jose requests Setup PostgreSQL.\ 
-  Create database: ai_app Update credentials in:    backend/database.py
+  Install dependencies  pip install fastapi uvicorn sqlalchemy psycopg2 passlib python-jose requests Setup PostgreSQL.  Create database: ai_app Update credentials in:    backend/database.py
 ### 3. Install Ollama & Model
-  Download Ollama: https://ollama.com  
-  Pull model: ollama pull tinyllama
+  Download Ollama: https://ollama.com  Pull model: ollama pull tinyllama
 ### 4. Run Backend
   uvicorn backend.main:app --reload
 ### 5. Run Frontend
-  CMD and cd to frontend\: python -m http.server 5500
+  CMD and cd to .\frontend\: python -m http.server 5500
   
 ### 📌 Current Status
   - Authentication system
