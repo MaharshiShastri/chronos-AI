@@ -127,11 +127,11 @@ app.js
 ## ⚙️ Setup Instructions
 
 ### 1. Clone Repository
-  git clone [https://github.com/MaharshiShastri/local-llm-fullStack.git](https://github.com/MaharshiShastri/local-llm-fullStack.git) 
+  git clone [https://github.com/MaharshiShastri/local-llm-fullStack.git](https://github.com/MaharshiShastri/local-llm-fullStack.git) \
   cd local-llm-fullStack 
 ### 2. Backend Setup
-  Install dependencies  
-  pip install fastapi uvicorn sqlalchemy psycopg2 passlib python-jose requests Setup PostgreSQL 
+  Install dependencies\  
+  pip install fastapi uvicorn sqlalchemy psycopg2 passlib python-jose requests Setup PostgreSQL.\ 
   Create database: ai_app Update credentials in:    backend/database.py
 ### 3. Install Ollama & Model
   Download Ollama: https://ollama.com  
@@ -168,7 +168,7 @@ app.js
       - Proactive AI systems that act *before* user input rather than reacting after
     - **Autonomous decision-support systems**
     - **Personalized AI assistants with predictive behavior modeling**
-⚠️ Notes
+### ⚠️ Notes
   Ollama must be installed locally
   Database must be configured before running
   Current setup is optimized for development, not production
