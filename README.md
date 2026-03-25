@@ -127,34 +127,38 @@ app.js
 ## ⚙️ Setup Instructions
 
 ### 1. Clone Repository
-  git clone [https://github.com/MaharshiShastri/local-llm-fullStack.git](https://github.com/MaharshiShastri/local-llm-fullStack.git) cd local-llm-fullStack 
-2. Backend Setup
-  Install dependencies  pip install fastapi uvicorn sqlalchemy psycopg2 passlib python-jose requests Setup PostgreSQL Create database: ai_app Update credentials in:    backend/database.py
-3. Install Ollama & Model
-  Download Ollama: https://ollama.com  Pull model: ollama pull tinyllama
-4. Run Backend
+  git clone [https://github.com/MaharshiShastri/local-llm-fullStack.git](https://github.com/MaharshiShastri/local-llm-fullStack.git) 
+  cd local-llm-fullStack 
+### 2. Backend Setup
+  Install dependencies  
+  pip install fastapi uvicorn sqlalchemy psycopg2 passlib python-jose requests Setup PostgreSQL 
+  Create database: ai_app Update credentials in:    backend/database.py
+### 3. Install Ollama & Model
+  Download Ollama: https://ollama.com  
+  Pull model: ollama pull tinyllama
+### 4. Run Backend
   uvicorn backend.main:app --reload
-5. Run Frontend
+### 5. Run Frontend
   CMD and cd to frontend\: python -m http.server 5500
   
-📌 Current Status
-  Authentication system
-  Chat + streaming
-  Database integration
-  Frontend UI/UX
-  Multi-session management (enhanced)
-  Model optimization
+### 📌 Current Status
+  - Authentication system
+  - Chat + streaming
+  - Database integration
+  - Frontend UI/UX
+  - Multi-session management (enhanced)
+  - Model optimization
   
-Deployment
-🔮 Future Work
-🧠 Fine-tuned models / better LLM integration
-🌐 Deployment (cloud + local hybrid)
-📊 Analytics on conversations
-🧩 Plugin/tool system (Agent capabilities)
-🗂️ Advanced session/history management
-🎙️ Voice input/output
-🧠 Research Direction
-  This project can evolve into:
+### Deployment
+- 🔮 Future Work
+- 🧠 Fine-tuned models / better LLM integration
+- 🌐 Deployment (cloud + local hybrid)
+- 📊 Analytics on conversations
+- 🧩 Plugin/tool system (Agent capabilities)
+- 🗂️ Advanced session/history management
+- 🎙️ Voice input/output
+- 🧠 Research Direction
+  ## This project can evolve into:
     - **Agentic AI systems**
     - **Human-like conversational memory models**
     - **Edge AI + Local LLM ecosystems**
