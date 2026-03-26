@@ -11,3 +11,17 @@ class ChatResponse(BaseModel):
 class UserAuth(BaseModel):
     email: str
     password: str
+
+class PlanRequest(BaseModel):
+    task: str
+    time_budget: int #In seconds
+    mode: str="fast" #Fast is default mode, otherwise deep
+
+class PlanStep(BaseModel):
+    step: str
+    time_allocated: int
+
+class PlanResponse(BaseModel):
+    plan: list[PlanStep]
+    total_time: int
+

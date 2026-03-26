@@ -1,8 +1,8 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from database import SessionLocal
-from schemas import ChatRequest, ChatResponse, UserAuth
-from ai_service import generate_response, generate_stream
+from schemas import ChatRequest, ChatResponse, UserAuth, PlanResponse, PlanRequest
+from ai_service import generate_response, generate_stream, generate_plan
 from zoneinfo import ZoneInfo
 import models
 from database import Base, engine
@@ -19,7 +19,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:8000", "http://localhost:8000", "http://localhost:5500"],
     allow_credentials = True,
     allow_methods = ["*"],
     allow_headers = ["*"],
@@ -228,3 +228,15 @@ async def chat_stream(request: ChatRequest, db: Session = Depends(get_db), curre
         
     return StreamingResponse(stream(), media_type="text/event-stream")
 
+@app.post("/plan", response_model= PlanResponse)
+async def create_execution_plan(request: PlanRequest, current_user: models.User = Depends(get_current_user)) :
+    #Analyze a task and returns a timed breakdwon
+    try:
+        plan_data = generate_plan(request.task, request.time_budget, request.mode)
+        return {
+            "plan": plan_data,
+            "total_time": request.time_budget
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
