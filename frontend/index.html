@@ -1,89 +1,13 @@
 <!DOCTYPE html>
-
 <html lang="en">
-
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>AI_ASSISTANT</title>
-        <link rel="stylesheet" href="styles.css">
-    </head>
-
-    <body>
-        <!-- Singel Page Application for Authentication and access to Ollama LLM frontend-->
-        <div class="grid-overlay"></div>
-        <!-- This is the start of the authorization and loading section-->
-        <div id="auth-page" class="page-container">
-            <div class="neumorphic-card auth-card">
-                <div class="header-zone">
-                    <h1 id="auth-title">IDENTITY VERIFICATION</h1>
-                    <div class="status-dot"></div>
-                </div>
-                <div id="loader-modal" class="hidden">
-                    <div class="cube-container">
-                        <div class="cube">
-                            <div class="face front">NODE</div>
-                            <div class="face back">DATA</div>
-                            <div class="face right">AI</div>
-                            <div class="face left">USER</div>
-                            <div class="face top">LOAD</div>
-                            <div class="face bottom">CORE</div>
-                        </div>
-                    </div>
-                    <div id="loader-status" class="loader-text">INITIALIZING...</div>
-                    <div id="loader-messages"></div>
-                </div>
-                <div id="auth-content">
-                    <div class="switch-container neumorphic-inset">
-                        <div id="switch-bg" class="switch-selection"></div>
-                        <div class="switch-label" onclick="setAuthMode(true)">LOGIN</div>
-                        <div class="switch-label" onclick="setAuthMode(false)">SIGNUP</div>
-                    </div>
-                    <form id="auth-form" onsubmit="event.preventDefault(); handleAuth();">
-                        <div class="input-group">
-                            <label>IDENTITY EMAIL</label>
-                            <input type="email" id="auth-email" required>
-                        </div>
-                        <div class="input-group">
-                            <label>ACCESS CIPHER</label>
-                            <input type="password" id="auth-pass" required>
-                        </div>
-                        <button type="submit" id="auth-btn">AUTHENTICATE</button>
-                    </form>
-                    <p class="toggle-text">
-                        System status: <span id="toggle-link">SECURE_CONNECTION_PENDING</span>
-                    </p>
-                </div>
-            </div>
-        </div>
-        <!-- This is the end of the authorization and loading section-->
-
-        <!-- This is the start of the Conversation section-->
-        <div id="chat-page" class="page-container" style="display: none;">
-            <!-- SIde bar division to access previous chats -->
-            <div class="side-bar">
-                <h3>SESSIONS</h3>
-                <div id="chat-history-list"></div>
-            </div>
-            <!-- ACtual Chat interface with Ollama LLM -->
-            <div id="chat-container">
-                <header>
-                    <div class="user-info">
-                        <span class="active-node"></span>
-                        <span id="user-display"></span>
-                    </div>
-                    <button class="logout-btn" onclick="handleLogout()">LOGOUT</button>
-                </header>
-                <div id="messages"></div>
-                <div id="input-area">
-                    <input id="input" placeholder="Enter prompt..." onkeydown="if(event.key==='Enter') sendMessage()">
-                    <button onclick="sendMessage()" id="send-btn">SEND</button>
-                    <button onclick="stopGeneration()" id="stop-btn" class="hidden">STOP</button>
-                </div>
-            </div>
-        </div>
-        <!-- This is the end of the Conversation section-->
-        <script src="app.js"></script>
-        <!-- Singel Page Application for Authentication and access to Ollama LLM frontend-->
-    </body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="./src/index.css">
+    <title>Chronos AI</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
 </html>
