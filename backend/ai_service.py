@@ -6,18 +6,16 @@ import os
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "llama3.2:3b"
-
+temperature = 0.2
 def ollama_running():
     try:
-        requests.get(OLLAMA_URL, timeout=2)
+        requests.get("http://localhost:11434/", timeout=2)
     except requests.exceptions.ConnectionError:
         print("Ollama is not running. Starting server...")
         try:
-            env = os.environ.copy()
-            env['OLLAMA_DEBUG'] = "1"
-            env["CUDA_VISIBLE_DEVICES"] = "1"
-            subprocess.Popen(["ollama serve"], stdout = subprocess.DEVNULL, stderr= subprocess.DEVNULL, env=env)
-            time.sleep(3)
+            print("Starting Ollama with GPU Discovery...")
+            subprocess.Popen(["ollama",  "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(5)
         
         except FileNotFoundError:
             print("Error: 'ollama' command not found. Please install ollama")
@@ -36,6 +34,8 @@ def generate_response(prompt) -> str:
             timeout=180
         )
         if(response.status_code == 200):
+            if not response.body():
+                return {"error": "EMPTY_RESPONSE in generate_response in ai_service.py"}, 200
             data = response.json()
             return data.get("response", "No response field in the API response.")
         
@@ -49,53 +49,61 @@ def generate_response(prompt) -> str:
         return f"Error: {str(e)}"
 
 def generate_plan(task: str, total_time: int, mode: str):
-    prompt = f""""
-    [INST] You are a logic-based planning engine.
-Task: "{task}"
-Budget: {total_time} seconds.
-Mode: {mode}
-Generate a JSON array of steps.
-CRITICAL RULES:
-1. Use ONLY the key "step" for the description.
-2. Use ONLY the key "time_allocated" for the seconds.
-3. Return ONLY the raw JSON array. No preamble, no "step1" keys, no "actions" keys.
+    prompt = f"""[INST] <<SYS>>
+You are a deterministic logic engine that outputs ONLY valid JSON arrays. 
+Do not include any conversational text, notes, or markdown blocks.
+<</SYS>>
 
-FORMAT EXAMPLE:
+Task: "{task}"
+Total Time Budget: {total_time} seconds
+Mode: {mode}
+
+Constraint: Break this task into a logical sequence of 4 to 7 detailed steps.
+The sum of "time_allocated" across all objects must equal exactly {total_time}.
+
+REQUIRED JSON FORMAT:
 [
-  {{"step": "Shut off water", "time_allocated": 60}},
-  {{"step": "Remove handle", "time_allocated": 120}}
+  {{"step": "Detailed description of action", "time_allocated": 60}},
+  {{"step": "Next logical action", "time_allocated": 120}}
 ]
-[/INST]
-    """
+
+Output the JSON array now:
+[/INST]"""
     print('Inserted prompt: ', prompt)
+    buffer = ""
     try:
         response = requests.post(
             OLLAMA_URL,
             json={
-                "model":MODEL_NAME,
-                "prompt" : prompt,
-                "format": "json",
+                "model": MODEL_NAME,
+                "prompt": prompt,
+                "format": "json", # This is good, Ollama will try to force JSON
+                "temperature": temperature,
                 "stream": True
             },
-            timeout = 1800,
+            timeout=1800,
             stream=True
         )
 
         if response.status_code == 200:
-            print(response)
+            if not response.text:
+                print("Ollama returned an empty response.")
+                yield "data: {\"error\": \"Empty response from model in generate_plan.\"}\n\n"
+                return
             for line in response.iter_lines():
                 if line:
                     chunk = json.loads(line.decode('utf-8'))
                     token = chunk.get("response", "")
                     print(repr(token))
-                    yield f"data: {json.dumps({'token': token})}\n\n"
-                    
-                    if chunk.get("done"):
-                        return
+                    yield token
+        elif response.status_code == 500:
+            print("Ollama server error detected. Restarting server...")
+            subprocess.run(["taskkill", "/F", "/IM", "*ollama*"], capture_output=True)
+            subprocess.Popen(["ollama",  "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
-            yield f"data: {json.dumps({'error': 'Ollama error status'})}\n\n"
-        
-        return [{"step": "Error: API Unreachable", "time_allocated" : total_time}] #Error
+            error_msg = f"Error: Ollama returned status {response.status_code}"
+            print(error_msg, flush=True)
+            yield error_msg
     
     except Exception as e:
         print(f"Planning error: {e}")
