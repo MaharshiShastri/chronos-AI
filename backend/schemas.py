@@ -1,9 +1,9 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, AliasChoices
 from typing import Optional
 
 class ChatRequest(BaseModel):
     message: str
-    conversation_id: int | None = None
+    conversation_id: Optional[int] = None
 
 class ChatResponse(BaseModel):
     response: str
@@ -16,9 +16,10 @@ class PlanRequest(BaseModel):
     task: str
     time_budget: int #In seconds
     mode: str="fast" #Fast is default mode, otherwise deep
+    conversation_id: Optional[int] = None
 
 class PlanStep(BaseModel):
-    step: str
+    step: str = Field(validation_alias=AliasChoices('step', 'name', 'description'))
     time_allocated: int
 
 class PlanResponse(BaseModel):

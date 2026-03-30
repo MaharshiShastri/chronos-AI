@@ -9,13 +9,14 @@ MODEL_NAME = "llama3.2:3b"
 
 def ollama_running():
     try:
-        requests.get("https://localhost:11434/", timeout=2)
+        requests.get(OLLAMA_URL, timeout=2)
     except requests.exceptions.ConnectionError:
         print("Ollama is not running. Starting server...")
         try:
             env = os.environ.copy()
+            env['OLLAMA_DEBUG'] = "1"
             env["CUDA_VISIBLE_DEVICES"] = "1"
-            subprocess.Popen(["ollama", "serve"], stdout = subprocess.DEVNULL, stderr= subprocess.DEVNULL, env=env)
+            subprocess.Popen(["ollama serve"], stdout = subprocess.DEVNULL, stderr= subprocess.DEVNULL, env=env)
             time.sleep(3)
         
         except FileNotFoundError:
@@ -47,19 +48,26 @@ def generate_response(prompt) -> str:
     except Exception as e:
         return f"Error: {str(e)}"
 
-def generate_plan(task: str, total_time: int, mode: str) -> list:
+def generate_plan(task: str, total_time: int, mode: str):
     prompt = f""""
-    You are a time-constrained planning agent.
-    Task: "{task}"
-    Total Time Budget: {total_time} seconds.
-    Mode: {mode} (fast = brief steps, deep = detailed steps).
+    [INST] You are a logic-based planning engine.
+Task: "{task}"
+Budget: {total_time} seconds.
+Mode: {mode}
+Generate a JSON array of steps.
+CRITICAL RULES:
+1. Use ONLY the key "step" for the description.
+2. Use ONLY the key "time_allocated" for the seconds.
+3. Return ONLY the raw JSON array. No preamble, no "step1" keys, no "actions" keys.
 
-    Break this task into exactly 3-5 logical steps.
-    Allocate a portion of total {total_time} seconds to each step.
-    Return ONLY a JSON array of objects with "step" and "time_allocated" keys.
-    Example: [{{"step": "Analyze", "time_allocated": 30}} ]
+FORMAT EXAMPLE:
+[
+  {{"step": "Shut off water", "time_allocated": 60}},
+  {{"step": "Remove handle", "time_allocated": 120}}
+]
+[/INST]
     """
-
+    print('Inserted prompt: ', prompt)
     try:
         response = requests.post(
             OLLAMA_URL,
@@ -67,25 +75,31 @@ def generate_plan(task: str, total_time: int, mode: str) -> list:
                 "model":MODEL_NAME,
                 "prompt" : prompt,
                 "format": "json",
-                "stream": False
+                "stream": True
             },
-            timeout = 180
+            timeout = 1800,
+            stream=True
         )
 
         if response.status_code == 200:
-            raw_content = response.json().get("response", "")
-            data = json.loads(raw_content)
-            if isinstance(data, dict):
-                for key in ["plan", 'steps', 'tasks']:
-                    if key in data: return data[key] #Return the dictionary values of plan
-                return [data] #Return dictionary as the string 
-            return data #Return the raw data recieved
+            print(response)
+            for line in response.iter_lines():
+                if line:
+                    chunk = json.loads(line.decode('utf-8'))
+                    token = chunk.get("response", "")
+                    print(repr(token))
+                    yield f"data: {json.dumps({'token': token})}\n\n"
+                    
+                    if chunk.get("done"):
+                        return
+        else:
+            yield f"data: {json.dumps({'error': 'Ollama error status'})}\n\n"
         
         return [{"step": "Error: API Unreachable", "time_allocated" : total_time}] #Error
     
     except Exception as e:
         print(f"Planning error: {e}")
-        return[{"step": "Execute Task", "time_allocated":total_time}]
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
     
 
 def generate_stream(prompt: str):
@@ -104,6 +118,7 @@ def generate_stream(prompt: str):
             if line:
                 data = json.loads(line.decode("utf-8"))
                 token = data.get("response", "")
+                #print(repr(token))
                 yield token
 
                 if data.get("done"):
