@@ -67,6 +67,7 @@ const ChatWindow = ({ onLogout }) => {
 
     // 4. Chat Logic
     const handleChat = async () => {
+        
         if (!input.trim() || loading) return;
         const currentInput = input;
         const currentId = localStorage.getItem("current_conv_id");
@@ -76,7 +77,8 @@ const ChatWindow = ({ onLogout }) => {
         setLoading(true);
 
         try {
-            await aiService.streamChat(currentInput, currentId, (token) => {
+            await aiService.streamChat(currentInput, currentId, (data) => {
+                const token = data.token !== undefined ? data.token : data;
                 setMessages(prev => {
                     const updated = [...prev];
                     updated[updated.length - 1].content += token;
@@ -90,36 +92,57 @@ const ChatWindow = ({ onLogout }) => {
 
     // 5. Plan Logic (With Normalization Fix)
     const handlePlanRequest = async () => {
-        if (!input.trim() || loading) return;
-        setLoading(true);
-        setActivePlan(null);
+    if (!input.trim() || loading) return;
+    
+    setLoading(true);
+    // Keep activePlan null so we stay on the configuration screen with the loading spinner
+    let firstStepReceived = false;
+
+    try {
+        // We await the entire execution of streamPlan
+        await aiService.streamPlan(input, timeBudget, null, planMode, (data) => {
+            console.log("Streamed Data:", data);
+            if(data.token){
+                if(!firstStepReceived){
+                    firstStepReceived = true;
+                    setActivePlan({
+                        mission_id: Date.now(),
+                        steps: []
+                    });
+                    setView('plan');
+                }
+            }
+            if(data.enriched_step){
+                setActivePlan(prev => ({
+                    ...prev,
+                    mission_id: data.mission_id,
+                    steps: data.enriched_steps.map((s, idx) => ({
+                        id: s.step_id || idx,
+                        step: s.step,
+                        time_allocated: parseInt(s.time_allocated || 60),
+                    }))
+                }));
+            }
+            if(data.error){
+                throw new Error(data.error);
+                console.log("Error in streamPlan:", data.error);
+            }
+    });
+        const updatedTasks = await aiService.getTasks();
+        setTasks(updatedTasks.data || []);
         
-        try {
-            let accumulatedJSON = "";
-            await aiService.streamPlan(input, timeBudget, null, planMode, (token) => {
-                accumulatedJSON += token;
-            });
-
-            const firstChar = accumulatedJSON.search(/[\[{]/);
-            const lastChar = Math.max(accumulatedJSON.lastIndexOf(']'), accumulatedJSON.lastIndexOf('}'));
-            
-            if (firstChar === -1) throw new Error("No JSON detected");
-
-            const cleanJSON = accumulatedJSON.substring(firstChar, lastChar + 1);
-            const parsed = JSON.parse(cleanJSON);
-            
-            // NORMALIZATION: Ensure ExecutionView always gets an object with a 'steps' key
-            const normalized = Array.isArray(parsed) ? { steps: parsed } : (parsed.steps ? parsed : { steps: [parsed] });
-            
-            setActivePlan(normalized);
-            const updatedTasks = await aiService.getTasks();
-            setTasks(updatedTasks.data);
-        } catch (err) {
-            console.error("Planning Error:", err);
-            alert("STRATEGIC_ERROR: AI response format invalid.");
-        } finally { setLoading(false); }
-    };
-
+    } catch (err) {
+        console.error("Stream Failure:", err);
+        // Only alert if the stream finished and we still have no data
+        if (!firstStepReceived) {
+            alert("STRATEGIC_ERROR: Logic engine failed to provide a valid sequence.");
+            setActivePlan(null);
+            setView('plan'); 
+        }
+    } finally {
+        setLoading(false);
+    }
+};
     // 6. Rename/Delete Handlers
     const startRename = (id, title, e) => {
         e.stopPropagation();
@@ -231,11 +254,31 @@ const ChatWindow = ({ onLogout }) => {
                     ) : (
                         <div className="h-full overflow-y-auto custom-scrollbar">
                             {activePlan ? (
-                                <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                                    <button onClick={() => setActivePlan(null)} className="text-[10px] text-amber-500 flex items-center gap-1 mb-6 hover:text-amber-400 group transition-all">
+                                <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 h-full flex flex-col">
+                                    <button 
+                                        onClick={() => { setActivePlan(null); setLoading(false); }} 
+                                        className="text-[10px] text-amber-500 flex items-center gap-1 mb-6 hover:text-amber-400 group transition-all w-fit"
+                                    >
                                         <ChevronLeft size={14} className="group-hover:-translate-x-1 transition-transform"/> RECONFIGURE_PLAN
                                     </button>
-                                    <ExecutionView plan={activePlan} onComplete={() => { setActivePlan(null); setView('chat'); }} />
+                                    
+                                    {/* SYNTHESIZING LOADER: Only shows if steps are empty AND we are still loading */}
+                                    {activePlan.steps.length === 0 && loading ? (
+                                        <div className="flex-1 flex flex-col items-center justify-center space-y-4">
+                                            <div className="w-12 h-12 border-2 border-amber-500/10 border-t-amber-500 rounded-full animate-spin"></div>
+                                            <div className="flex flex-col items-center gap-1">
+                                                <p className="text-amber-500 text-[10px] font-black animate-pulse uppercase tracking-[0.2em]">
+                                                    Synthesizing_Logic_Gates...
+                                                </p>
+                                                <p className="text-slate-600 text-[8px] font-mono">STREAMS_ACTIVE // GPU_LOAD: HIGH</p>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <ExecutionView 
+                                            plan={activePlan} 
+                                            onComplete={() => { setActivePlan(null); setView('chat'); }} 
+                                        />
+                                    )}
                                 </div>
                             ) : (
                                 <div className="max-w-md mx-auto w-full pt-4 space-y-8">
@@ -266,8 +309,19 @@ const ChatWindow = ({ onLogout }) => {
                                             className="w-full h-32 neumorphic-inset p-4 text-xs text-amber-400 outline-none resize-none font-mono placeholder:text-slate-700" 
                                         />
                                         
-                                        <button onClick={handlePlanRequest} disabled={loading || !input} className="w-full py-4 bg-amber-500 rounded-xl text-slate-900 font-black flex items-center justify-center gap-3 hover:bg-amber-400 transition-all shadow-xl shadow-amber-900/20 active:scale-95 disabled:opacity-30">
-                                            {loading ? <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-slate-900"></div> : <><Zap size={18} fill="currentColor"/> INITIATE_DEPLOYMENT</>}
+                                        <button 
+                                            onClick={handlePlanRequest} 
+                                            disabled={loading || !input.trim()} 
+                                            className="w-full py-4 bg-amber-500 rounded-xl text-slate-900 font-black flex items-center justify-center gap-3 hover:bg-amber-400 transition-all shadow-xl shadow-amber-900/20 active:scale-95 disabled:opacity-50"
+                                        >
+                                            {loading ? (
+                                                <div className="flex items-center gap-2">
+                                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-slate-900"></div>
+                                                    <span>SYNTHESIZING...</span>
+                                                </div>
+                                            ) : (
+                                                <><Zap size={18} fill="currentColor"/> INITIATE_DEPLOYMENT</>
+                                            )}
                                         </button>
                                     </div>
                                 </div>
