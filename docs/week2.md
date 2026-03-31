@@ -101,3 +101,41 @@ A fully interactive execution system where:
 
 Plans are not just generated
 They are experienced, tracked, and controlled in real time
+
+Day 4 – Streaming Execution Engine (SSE + Backend Flow)
+Implemented real-time execution engine using Server-Sent Events (SSE) in FastAPI
+Designed /execute/{mission_id} endpoint to stream step-by-step execution updates
+Built async run_mission_stream() to simulate agent behavior under time constraints
+Introduced structured execution events:
+STEP_STARTED
+REQUIRE_APPROVAL
+STEP_COMPLETED
+MISSION_COMPLETED
+Created pending_approvals system using asyncio.Event for human-in-the-loop control
+Ensured cleanup of pending states after mission completion
+Day 5 – Human-in-the-Loop + Time Intelligence
+Implemented approval workflow via /execute/{mission_id}/approve endpoint
+Enabled two decision paths:
+Approved → continue execution
+Refined → update artifact dynamically
+Built drift detection system:
+Measured difference between allocated vs actual execution time
+Developed TimeOptimizer to redistribute time dynamically across remaining steps
+Ensured minimum time constraints per step to avoid collapse of plan
+Integrated feedback loop between execution engine and optimizer
+Day 6 – Frontend Execution UI + State Sync
+Built ExecutionView.jsx for real-time mission visualization
+Implemented:
+Live progress tracking
+Step highlighting (active/completed/pending)
+Countdown timer per step
+Integrated SSE stream with frontend using fetchStream()
+Designed approval UI:
+Editable artifact textarea
+Approve / Refine actions
+Synced backend events with UI states (STEP_STARTED, REQUIRE_APPROVAL, etc.)
+Added mission lifecycle control:
+Start execution
+Pause on approval
+Resume after decision
+Implemented dynamic progress bar and completion trigger
