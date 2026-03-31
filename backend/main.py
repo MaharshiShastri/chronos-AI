@@ -15,6 +15,7 @@ from auth import hash_password, verify_password, create_access_token, SECRET_KEY
 from jose import jwt, JWTError
 from datetime import datetime
 import uuid
+from executor import run_mission_stream, pending_approvals
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl = "login")
 app = FastAPI()
@@ -265,14 +266,18 @@ async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_
             import re
             match = re.search(r'\[.*\]', accumulated_json, re.DOTALL)
             if match:
-                clean_json = match.group(0)
-                clean_json = clean_json.replace("}{", "},{")
+                clean_json = match.group(0).replace("}{", "},{")
                 raw_steps = json.loads(clean_json)
             else:
                 found_objects = re.findall(r'\{[^{}]*\}', accumulated_json, re.DOTALL)
                 raw_steps = [json.loads(obj) for obj in found_objects]
 
             if raw_steps:
+                current_sum = sum(s.get("time_allocated", 0) for s in raw_steps)
+                if current_sum < request.time_budget:
+                    remainder = request.time_budget - current_sum
+                    raw_steps[-1]["time_allocated"] += remainder
+
                 enriched_steps = []
                 for idx,s in enumerate(raw_steps):
                     desc = s.get("step") or s.get("description") or "No description"
@@ -286,8 +291,8 @@ async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_
                     db.add(step_entry)
                     enriched_steps.append({
                         "step_id": step_entry.backend_step_id,
-                    "step": step_entry.description,
-                    "time_allocated": step_entry.time_allocated
+                        "step": step_entry.description,
+                        "time_allocated": step_entry.time_allocated
                     })
                     print(enriched_steps)
                 db.commit()
@@ -355,3 +360,69 @@ def update_title(conversation_id: int, title: str, db: Session = Depends(get_db)
 @app.get("/tasks")
 def get_tasks(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     return db.query(models.Tasks).filter(models.Tasks.user_id == current_user.id).order_by(models.Tasks.created_at.desc()).all()
+
+@app.delete("/task/{task_id}")
+def delete_task(task_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    task = db.query(models.Tasks).filter(
+        models.Tasks.user_id == current_user.id,
+        models.Tasks.id == task_id
+    ).first()
+    if not task:
+        raise HTTPException(status_code = 404, detail="Task not found or access denied")
+
+    db.delete(task)
+    db.commit()
+    return {"message": "Task deleted successfully!"}
+
+@app.patch("/task/{task_id}")
+def update_task_status(task_id: int, status: str, db: Session = Depends(get_db), current_user: models.User=Depends(get_current_user)):
+    task = db.query(models.Tasks).filter(
+        models.Tasks.user_id == current_user.id,
+        models.Tasks.id == task_id
+    ).first()
+
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found or access denied")
+
+    task.status = status
+    db.commit()
+    return {"status": task.status}
+
+
+@app.get("/execute/{mission_id}")
+async def start_execution(mission_id: int, db:Session = Depends(get_db)):
+    task = db.query(models.Tasks).filter(models.Tasks.id == mission_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Mission not found")
+
+    steps_query = db.query(models.TaskStep).filter(models.TaskStep.task_id == mission_id).all()
+    steps = [
+        {"step_id": s.backend_step_id, "step": s.description, "time_allocated": s.time_allocated}
+        for s in steps_query
+    ]
+
+    async def event_generator():
+        print(f"Starting execution for mission {mission_id} with steps: {steps}")
+        try:
+            async for event in run_mission_stream(mission_id, steps, task.total_time):
+                print("event: ", event)
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'event': 'ERROR', 'detail': str(e)})}\n\n"
+
+        finally:
+            if mission_id in pending_approvals:
+                del pending_approvals[mission_id]
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+        
+@app.post("/execute/{mission_id}/approve")
+async def start_execution(mission_id: int, data: dict):
+    if mission_id not in pending_approvals:
+        raise HTTPException(status_code=404, detail="Mission or approval event not found")
+
+    pending_approvals[mission_id]["status"] = data.get("status")
+    pending_approvals[mission_id]["data"] = data.get("content")
+
+    pending_approvals[mission_id]["event"].set()
+    return {"message": "Success. Loop Resumed"}

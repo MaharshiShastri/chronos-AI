@@ -50,24 +50,23 @@ def generate_response(prompt) -> str:
 
 def generate_plan(task: str, total_time: int, mode: str):
     prompt = f"""[INST] <<SYS>>
-You are a deterministic logic engine that outputs ONLY valid JSON arrays. 
-Do not include any conversational text, notes, or markdown blocks.
+You are a project management assistant. 
+Output ONLY a JSON array containing EXACTLY 5 to 7 objects.
+Each object must have "step" and "time_allocated".
+The sum of all "time_allocated" values MUST be exactly {total_time}.
 <</SYS>>
 
 Task: "{task}"
-Total Time Budget: {total_time} seconds
-Mode: {mode}
+Total Time: {total_time} seconds
 
-Constraint: Break this task into a logical sequence of 4 to 7 detailed steps.
-The sum of "time_allocated" across all objects must equal exactly {total_time}.
-
-REQUIRED JSON FORMAT:
+Example of 5 steps adding to {total_time}:
 [
-  {{"step": "Detailed description of action", "time_allocated": 60}},
-  {{"step": "Next logical action", "time_allocated": 120}}
+  {{"step": "Step 1...", "time_allocated": {total_time // 5}}},
+  {{"step": "Step 2...", "time_allocated": {total_time // 5}}},
+  ...
 ]
 
-Output the JSON array now:
+JSON Array:
 [/INST]"""
     print('Inserted prompt: ', prompt)
     buffer = ""
@@ -79,6 +78,7 @@ Output the JSON array now:
                 "prompt": prompt,
                 "format": "json", # This is good, Ollama will try to force JSON
                 "temperature": temperature,
+                "num_predict": 1000, 
                 "stream": True
             },
             timeout=1800,
@@ -94,11 +94,11 @@ Output the JSON array now:
                 if line:
                     chunk = json.loads(line.decode('utf-8'))
                     token = chunk.get("response", "")
-                    print(repr(token))
+                    #print(repr(token))
                     yield token
         elif response.status_code == 500:
             print("Ollama server error detected. Restarting server...")
-            subprocess.run(["taskkill", "/F", "/IM", "*ollama*"], capture_output=True)
+            subprocess.run(["taskkill", "/F", "/IM", "ollama*"], capture_output=True)
             subprocess.Popen(["ollama",  "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
             error_msg = f"Error: Ollama returned status {response.status_code}"
