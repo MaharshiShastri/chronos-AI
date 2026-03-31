@@ -10,34 +10,41 @@ API.interceptors.request.use((config) => {
     return config;
 });
 
-const fetchStream = async(endpoint, body, onChunk) => {
+const fetchStream = async(endpoint, body, onChunk, method="POST") => {
     const token = localStorage.getItem('token');
-    const response = await fetch(`${API_URL}${endpoint}`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${token}`
-        },
-        body: JSON.stringify(body)
-    });
+    const options = {
+        method: method,
+        headers:{
+            "Authorization": `Bearer ${token}`,
+        }
+    }
+    if(method!=="GET") {options.headers["Content-Type"] = "application/json"; options.body = body ? JSON.stringify(body) : null;}
+    else {options.body = null;}
 
+    const response = await fetch(`${API_URL}${endpoint}`, options);
+    console.log(response);
     if (response.status === 401) throw new Error("UNAUTHORIZED");
+
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    
     while(true){
         const {done, value} = await reader.read();
         if(done) break;
+    
         buffer += decoder.decode(value, {stream: true});
         const lines = buffer.split("\n");
         buffer = lines.pop();
+    
         for(const line of lines){
-            if(line.startsWith("data: ")){
+            const trimmedLine = line.trim();
+            if(trimmedLine.startsWith("data: ")){
                 try{
-                    const jsonString = line.replace("data: ", "");
+                    const jsonString = trimmedLine.replace("data: ", "");
                     const data = JSON.parse(jsonString);
 
-                    if(data.token)  onChunk(data.token);
+                    onChunk(data);
                     if(data.conversation_id)    localStorage.setItem("current_conv_id", data.conversation_id);
                 } catch(e) {
                     console.error("Error parsing SSE line:", e);
@@ -55,7 +62,7 @@ export const aiService = {
     // Stream plans
     streamPlan: (task, time_budget, conversationid, mode,  onChunk) => {
         const id = conversationid ? parseInt(conversationid) : null;
-        return fetchStream("/plan", { task, time_budget, mode: mode, conversation_id: id }, onChunk);
+        return fetchStream("/plan", { task, time_budget: parseInt(time_budget), mode: mode, conversation_id: id }, onChunk);
     },
     //Stream chat
     streamChat: (history, conversationid, onChunk) => {
@@ -69,10 +76,24 @@ export const aiService = {
     },
     //Get conversations
     getConversations: () => API.get("/conversations"),
-    //Get previous tasks
-    getTasks: () => API.get("/tasks"),
     //Delete conversation
     deleteConversation: (conversationID) => API.delete(`/conversation/${conversationID}`),
     //Rrename conversation
     renameConversation: (conversationID, newName) => API.put(`/conversation/${conversationID}`, {title: newName}),
+    //CRUD for tasks
+    getTasks: () => API.get("/tasks"),
+    deleteTask: (taskID) => API.delete(`/task/${taskID}`),
+    updateTaskStatus: (taskID, status) => API.put(`/task/${taskID}`, {status}),
+    
+    executeMission: (missionId, onEvent) => {
+        console.log("Initializing Stream for Mission:", missionId);
+        //const id = conversationId ? parseInt(conversationId) : null;
+        return fetchStream(`/execute/${missionId}`, null, onEvent, "GET");
+    },
+    approveStep: (missionId, status, content) => {
+        return API.post(`/execute/${missionId}/approve`, {
+            status,
+            data: content
+        });
+    }
 };
