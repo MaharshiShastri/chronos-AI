@@ -99,8 +99,14 @@ A working demonstration of the system has been recorded.
 
 📹 **Video Proof:**  
 
-https://github.com/user-attachments/assets/284a965f-9619-4349-8cd9-851e745d43bf
+--Week 1
+<br>
 
+
+https://github.com/user-attachments/assets/8455e350-4e5a-4cbe-a815-e344b07dc772
+
+--Week 2
+<br>
 
 
 This demonstrates:
