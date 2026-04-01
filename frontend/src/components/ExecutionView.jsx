@@ -81,8 +81,13 @@ const ExecutionView = ({ plan, onComplete }) => {
           if (onComplete) onComplete();
           break;
           
+        case "ERROR":
+          console.error("MISSION_EXECUTION_ERROR:", data.detail || data.message);
+          // Optionally show a toast or alert to the user
+          setIsExecuting(false);
+          break;
         default:
-          console.log("Unhandled SSE Event:", data.event);
+          console.warn("Unknown event type:", data.event);
       }
     });
   };
