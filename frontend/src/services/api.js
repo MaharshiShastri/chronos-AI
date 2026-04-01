@@ -22,7 +22,6 @@ const fetchStream = async(endpoint, body, onChunk, method="POST") => {
     else {options.body = null;}
 
     const response = await fetch(`${API_URL}${endpoint}`, options);
-    console.log(response);
     if (response.status === 401) throw new Error("UNAUTHORIZED");
 
     const reader = response.body.getReader();
@@ -79,11 +78,11 @@ export const aiService = {
     //Delete conversation
     deleteConversation: (conversationID) => API.delete(`/conversation/${conversationID}`),
     //Rrename conversation
-    renameConversation: (conversationID, newName) => API.put(`/conversation/${conversationID}`, {title: newName}),
+    renameConversation: (conversationID, newName) => API.patch(`/conversation/${conversationID}`, {title: newName}),
     //CRUD for tasks
     getTasks: () => API.get("/tasks"),
     deleteTask: (taskID) => API.delete(`/task/${taskID}`),
-    updateTaskStatus: (taskID, status) => API.put(`/task/${taskID}`, {status}),
+    updateTaskStatus: (taskID, status) => API.patch(`/task/${taskID}`, {status}),
     
     executeMission: (missionId, onEvent) => {
         console.log("Initializing Stream for Mission:", missionId);
@@ -91,9 +90,9 @@ export const aiService = {
         return fetchStream(`/execute/${missionId}`, null, onEvent, "GET");
     },
     approveStep: (missionId, status, content) => {
-        return API.post(`/execute/${missionId}/approve`, {
+        return API.patch(`/execute/${missionId}/approve`, {
             status,
-            data: content
+            content: content
         });
     }
 };
