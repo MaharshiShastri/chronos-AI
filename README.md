@@ -109,6 +109,10 @@ https://github.com/user-attachments/assets/8455e350-4e5a-4cbe-a815-e344b07dc772
 <br>
 
 
+https://github.com/user-attachments/assets/39f46ce2-95d2-4b98-8a98-f4048687d12d
+
+
+
 This demonstrates:
 - Authentication flow  
 - Real-time streaming responses  
