@@ -28,3 +28,8 @@ class PlanResponse(BaseModel):
 
 class StatusUpdate(BaseModel):
     status: str
+class MemoryCreate(BaseModel):
+    fact_key: str
+    fact_value: str
+    importance: Optional[int] = 1   
+    category: Optional[str] = "general"
