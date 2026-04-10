@@ -78,7 +78,7 @@ export const aiService = {
     //Delete conversation
     deleteConversation: (conversationID) => API.delete(`/conversation/${conversationID}`),
     //Rrename conversation
-    renameConversation: (conversationID, newName) => API.patch(`/conversation/${conversationID}`, {title: newName}),
+    renameConversation: (conversationID, newName) => API.patch(`/conversation/${conversationID}?title=${encodeURIComponent(newName)}`),
     //CRUD for tasks
     getTasks: () => API.get("/tasks"),
     deleteTask: (taskID) => API.delete(`/task/${taskID}`),
@@ -89,10 +89,26 @@ export const aiService = {
         //const id = conversationId ? parseInt(conversationId) : null;
         return fetchStream(`/execute/${missionId}`, null, onEvent, "GET");
     },
-    approveStep: (missionId, status, content) => {
+    approveStep: (missionId, status, stepId, content) => {
         return API.patch(`/execute/${missionId}/approve`, {
-            status,
+            step_id: stepId,
+            status: status,
             content: content
         });
-    }
+    },
+
+    getMemories: () => API.get("/memories"),
+    addMemory: (memoryData) => API.post("/memory", memoryData),
+    deleteMemory: (memoryId) => API.delete(`/memory/${memoryId}`),
+    updateMemory: (memoryID, updates) => API.patch(`/memory/${memoryID}`, updates),
+    uploadDocument: async (file) => {
+        const formData = new FormData();
+        formData.append("file", file);
+
+        return API.post("/upload-doc", formData, {
+            headers: {
+                'Content-Type' : 'multipart/form-data',
+            },
+    });
+    },
 };
