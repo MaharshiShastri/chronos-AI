@@ -69,3 +69,29 @@ class TaskStep(Base):
     status = Column(String, default="pending")  # Individual step's current status
     artifact_content = Column(Text, nullable=True) # The content and detail about the step
     actual_duration = Column(Float, nullable=True) # Real time taken required to complete the step(useful for future reference to AI and dev)
+
+class Document(Base):
+    __tablename__ = "documents"
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String)
+    file_path = Column(Text)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    upload_date = Column(DateTime, default=datetime.utcnow)
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id"))
+    content = Column(Text) #~300 word long string
+    chunk_index = Column(Integer)
+    vector_id = Column(Integer)
+
+class UserMemory(Base):
+    __tablename__ = "user_memory"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    fact_key = Column(String) 
+    fact_value = Column(String)
+    importance = Column(Integer, default=1)
+    category = Column(String, default="general")
+    updated_at = Column(DateTime, default=datetime.utcnow(), onupdate=datetime.utcnow())
