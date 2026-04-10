@@ -1,20 +1,23 @@
-from fastapi import APIRouter, Depends, HTTPException, status, FastAPI
+from fastapi import APIRouter, Depends, HTTPException, status, FastAPI, UploadFile, File, BackgroundTasks
 from sqlalchemy.orm import Session
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from jose import jwt, JWTError
 import json
-import uuid
-import re
+import asyncio
+import fitz
 
 # Internal Imports (User-defined modules and methods)
 from database import SessionLocal
-from app.schemas.schemas import ChatRequest, ChatResponse, UserAuth, PlanResponse, PlanRequest, StatusUpdate
+from app.schemas.schemas import ChatRequest, ChatResponse, UserAuth, PlanResponse, PlanRequest, StatusUpdate, MemoryCreate
 from app.services.ai_service import generate_response, generate_stream, generate_plan
 import app.models.models as models
 from app.core.auth import hash_password, verify_password, create_access_token, SECRET_KEY, ALGORITHM
-from app.services.executor import run_mission_stream, pending_approvals
+from app.services.executor import run_mission_stream, ACTIVE_MISSIONS
 from fastapi.security import OAuth2PasswordBearer
 from app.services import chat_service, task_service
+from app.rag.retriever import rag_retriever
+from app.rag.ingestor import ingest_text, get_grounded_context
+from app.services.memory_service import get_memories, add_memory, delete_memory, update_memory, extract_and_save_memories
 
 api_router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -26,6 +29,26 @@ def get_db():
     finally:
         db.close()
 
+def get_rag_context(query: str, db: Session, threshold=0.7):
+    try:
+        result = rag_retriever.retrieve_context(query, db)
+        relevant_chunks = []
+        for doc, score in result:
+            if score >= threshold:
+                relevant_chunks.append(doc.page_content)
+            else:
+                print(f"DEBUG: Chunk with score {score} below threshold, skipping.")
+        
+        if not relevant_chunks:
+            return None
+        
+        return "\n---\n".join(relevant_chunks)
+    
+    except Exception as e:
+        print(f"RAG RETRIEVAL ERROR: {e}")
+    return None
+
+    
 @api_router.get("/")
 def root():
     return {"message": "AI Backend Running"}
@@ -162,39 +185,77 @@ def get_conversation(conversation_id: int, db: Session = Depends(get_db), curren
         }
         for msg in messages
     ]
-#Update the conversation with new prompt from user(streaming response used for live deployment)
 @api_router.post("/chat-stream")
-async def chat_stream(request: ChatRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    #Check if conversation exists, or create a new one and post the prompt in new conversation and return a streaming repsonse
-    #to simulate the AI human-like thinking and saving time and bandwith
-    # 1. Handle Conversation Lookup/Creation
-    conversation = chat_service.get_or_create_conversation(db, current_user.id, request.conversation_id, request.message)
+async def chat_stream(request: ChatRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user), bg_tasks: BackgroundTasks = BackgroundTasks()):
+    
+    if not current_user:
+        raise HTTPException(status_code=401, detail="User session invalid")
 
-    # 2. Save User Message immediately
-    chat_service.save_message(db, conversation, "user", request.message)
-    full_prompt = chat_service.build_chat_history(db, conversation.id, request.message)
+    # 1. Handle Conversation Creation/Lookup
+    if not request.conversation_id or request.conversation_id == "null":
+        temp_title = request.message[:30] + "..." if len(request.message) > 30 else request.message
+        new_conv = models.Conversation(title=temp_title, user_id=current_user.id)
+        db.add(new_conv)
+        db.commit()
+        db.refresh(new_conv)
+        conv_id = new_conv.id
+    else:
+        conv_id = int(request.conversation_id)
+
+    # 2. RETRIEVE CONTEXT (Do this BEFORE saving the new message to avoid self-matching)
+    # Use the retriever as the single source for RAG context
+    relevant_chunks = rag_retriever.retrieve_context(request.message, db)
+    doc_context = "\n---\n".join(relevant_chunks) if relevant_chunks else ""
+    
+    # 3. Save User Message
+    chat_service.save_message(db, conv_id, "user", request.message)
+    
+    # 4. Get User Memories
+    memories = get_memories(db, current_user.id)
+    memory_context = ""
+    if memories:
+        memory_context = "USER FACTS:\n" + "\n".join(
+            [f'-[{m.category}] {m.fact_key}: {m.fact_value}' for m in memories if m.importance >= 3]
+        )
+        
+    # 5. Build History
+    history = chat_service.build_chat_history(db, conv_id)
+    
+    # 6. Construct Final Prompt (Unified Context)
+    # We use doc_context here which contains the actual text from your PDF chunks
+    full_prompt = f"""<|system|>
+You are a helpful assistant. Use the provided context to inform your answer.
+
+DOCUMENT CONTEXT:
+{doc_context}
+
+MEMORY CONTEXT:
+{memory_context}
+
+CHAT HISTORY:
+{history[-5:]}
+
+<|user|>
+{request.message}
+<|assistant|>"""
+
+    print(f"Full prompt sent to model:\n{full_prompt}\n--- END OF PROMPT ---")
 
     async def stream_generator():
         ai_response = ""
         try:
-            # generate_stream should be your generator calling Ollama
+            yield f"data: {json.dumps({'conversation_id': conv_id})}\n\n"
             for token in generate_stream(full_prompt):
                 ai_response += token
                 yield f"data: {json.dumps({'token': token})}\n\n"
-            
-            # Send the ID at the end so the frontend can save it for the next turn
-            yield f"data: {json.dumps({'conversation_id': conversation.id})}\n\n"
-
         except Exception as e:
-            print(f"STREAM ERROR: {e}")
-            yield f"data: {json.dumps({'error': 'Connection Interrupted'})}\n\n"
-
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
         finally:
-            # 4. Save AI Response to DB
-            chat_service.save_message(db, conversation.id, "AI", ai_response)
+            chat_service.save_message(db, conv_id, "AI", ai_response)
+            # Ingest for future turns AFTER the response is generated
+            bg_tasks.add_task(ingest_text, db, f"Conversation {conv_id}", request.message, current_user.id, "conversation")
 
     return StreamingResponse(stream_generator(), media_type="text/event-stream")
-
 #Read of web-quivalent method
 @api_router.get('/conversations')
 def get_user_conversations(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -243,28 +304,61 @@ def update_title(conversation_id: int, title: str, db: Session = Depends(get_db)
     
     conv.title = title
     db.commit()
-    return {"title": conv.title, "id": id}
+    return {"title": conv.title, "id": conversation_id}
 #END of Ordinary conversations with AI functions below for web-equivalent CRUD operations
 #START of Agentic AI with time-awareness engine conversations with functions below for web-equivalent CRUD operations
 #Create function of web-equivalent method
 @api_router.post("/plan")
 async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    async def plan_generator():
-        accumulated_json = ""
-        try:
-            # 1. STREAM FROM AI
-            # Note: Ensure generate_plan is actually yielding strings
-            for token in generate_plan(request.task, request.time_budget, request.mode):
-                accumulated_json += token
-
-            raw_steps = task_service.clean_and_parse_plan(accumulated_json)
-            if not raw_steps:
-                yield f"data: {json.dumps({'error': "Failed to parse a plan"})}"
-
-            mission_id, enriched = task_service.create_mission_and_steps(db, current_user.id, request.task, request.time_budget, raw_steps)
-
-            yield f"data: {json.dumps({'mission_id': mission_id, 'enriched_steps': enriched, 'status': 'complete'})}\n\n"
+    raw_steps = []
+        
+    context = get_rag_context(request.task, db)
+    task_input = request.task
+    if context:
+        task_input = (f"""
+            TASK: {request.task}\n
+            REFERENCE KNOWLEDGE FROM DOCUMENTS: {context}\n 
+            INSTRUCTION: Use the reference knowledge to make the steps more specific.
+            """)
+    
+    print(f"Task input to plan generator: {task_input}")  # Debug log to check the final input to the plan generator
+    try:
+        for step in generate_plan(task_input, request.time_budget, request.mode):
+            print(type(step))
+            if isinstance(step, str):
+                step = {"step": step, "time_allocated": 60}
             
+            if isinstance(step, dict) and "error" in step:
+                return JSONResponse(status_code=500, content=step)
+            
+            raw_steps.append(step)
+            print(raw_steps)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    if not raw_steps:
+        return JSONResponse(status_code=400, content={"error": "PLAN_GENERATION_FAILED"})
+
+    # 2. SAVE TO DB (Now we have the full list)
+    mission_id, enriched = task_service.create_mission_and_steps(
+        db, current_user.id, request.task, request.time_budget, raw_steps
+    )
+    ingest_text(db, title=f"Task {mission_id}", raw_text = request.task, user_id=current_user.id, source_type="task") #Ingest the task description into RAG system for future retrieval
+    # 3. STREAM THE RESULTS TO UI
+    async def plan_generator():
+        try:
+            # First, stream the steps for the "Loading" UI one by one
+            for step_object in raw_steps:
+                print(f"Streaming step: {step_object}")  # Debug log to see the step being streamed
+                yield f"data: {json.dumps({'single_step': step_object, 'status': 'streaming'})}\n\n"
+                await asyncio.sleep(0.1) # Tiny delay so the UI animation looks smooth
+
+            # Finally, send the completion signal with the mission_id
+            yield f"data: {json.dumps({
+                'mission_id': mission_id, 
+                'enriched_steps': enriched, 
+                'status': 'complete'
+            })}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
@@ -310,48 +404,132 @@ def update_task_status(task_id: int, data: StatusUpdate, db: Session = Depends(g
 
 #Read funtion of web-equivalent
 @api_router.get("/execute/{mission_id}")
-async def start_execution(mission_id: int, db:Session = Depends(get_db)):
+async def start_execution(mission_id: int, db: Session = Depends(get_db)):
     #Once the step is approved, execute it here, remove from current list of steps
     #Do this until the entire task list is completed
+
     task = db.query(models.Tasks).filter(models.Tasks.id == mission_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Mission not found")
 
-    steps_query = db.query(models.TaskStep).filter(models.TaskStep.task_id == mission_id).all()
-    steps = [
-        {"step_id": s.backend_step_id, "step": s.description, "time_allocated": s.time_allocated}
-        for s in steps_query
+    steps = db.query(models.TaskStep).filter(models.TaskStep.task_id == mission_id).all()
+    manifest = [
+        {
+            "id": s.id,
+            "backend_step_id": s.backend_step_id, # Changed from step_id
+            "description": s.description, 
+            "time_allocated": s.time_allocated,
+            "status": "pending",
+            "artifact_content": ""
+        }
+        for s in steps
     ]
 
     async def event_generator():
-        print(f"Starting execution for mission {mission_id} with steps: {steps}")
         try:
-            async for event in run_mission_stream(mission_id, steps, task.total_time):
+            yield f"data: {json.dumps({'event': 'MANIFEST', 'steps': manifest})}\n\n"
+
+            async for event in run_mission_stream(mission_id, task.total_time, manifest):
                 yield f"data: {json.dumps(event)}\n\n"
+
+            for item in manifest:
+                db.query(models.TaskStep).filter(
+                        models.TaskStep.task_id == mission_id,
+                        models.TaskStep.backend_step_id == item['backend_step_id']
+                    ).update({
+                        "status": item["status"],
+                        "artifact_content": item["artifact_content"]
+                    })
+            db.commit()
+            yield f"data: {json.dumps({'event': 'DB_SYNC_COMPLETE'})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'event': 'ERROR', 'detail': str(e)})}\n\n"
-
-        finally:
-            if mission_id in pending_approvals:
-                del pending_approvals[mission_id]
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @api_router.patch("/execute/{mission_id}/approve")
-async def start_execution(mission_id: int, data: dict, step_id: str, db: Session = Depends(get_db)):
-    #An asynchronous function meant to stream set of tasks, check if such a task(mission) exists, if not then raise HTTPException,
-    #If task(mission) does exist, then plan the task and give plan to the user before actaully executing the steps in task list and wait for approval
-    #The user can whether let the system continue(approve) or update the content(as done below) and then approve
-    #Once approved and step is completed, then go to GET /execute/{mission_id} for further work
+async def approve_mission_step(mission_id: int, data: dict, db: Session = Depends(get_db)):
+    step_id = str(data.get("step_id"))
+    status_to_set = data.get("status", "completed")
+    new_content = data.get("content")
 
-    step = db.query(models.TaskStep).filter(models.TaskStep.task_id == mission_id, models.TaskStep.backend_step_id == step_id).forst()
+    # 1. Update the LIVE manifest in memory first
+    if mission_id in ACTIVE_MISSIONS:
+        manifest = ACTIVE_MISSIONS[mission_id]
+        # Find the specific step in the memory list
+        step_in_memory = next((s for s in manifest if str(s.get('backend_step_id')) == step_id), None)
+        
+        if step_in_memory:
+            step_in_memory['status'] = status_to_set
+            if new_content:
+                step_in_memory['artifact_content'] = new_content
+            
+            # 2. ALSO update DB in background so the state is persisted 
+            # if the user refreshes the page
+            step_db = db.query(models.TaskStep).filter(
+                models.TaskStep.task_id == mission_id,
+                models.TaskStep.backend_step_id == step_id
+            ).first()
+            
+            if step_db:
+                step_db.status = status_to_set
+                if new_content:
+                    step_db.artifact_content = new_content
+                db.commit()
+                
+            return {"message": "Memory updated, stream will proceed."}
 
-    if not step:
-        raise HTTPException(status_code=404, detail="Step not found")
+    raise HTTPException(status_code=404, detail="Mission not currently active in memory")
 
-    if (data.get("content")):
-        step.artifact_content = data.get("content")
-        step.status = "refined"
+#End of Agentic AI with time-awareness engine conversations with functions below for web-equivalent CRUD operations
+#START of Memory Vault functions for web-equivalent CRUD operations
+@api_router.get("/memories")
+def read_memories(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    return get_memories(db, current_user.id)
 
-    db.commit()
-    return {"message": "Step approved in DB. Executor resuming..."}
+@api_router.post("/memory")
+def add_user_memory(request: MemoryCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    new_memory = add_memory(
+        db,
+        user_id = current_user.id,
+        fact_key = request.fact_key,
+        fact_value = request.fact_value,
+        importance = request.importance,
+        category = request.category
+    )
+    return new_memory
+
+@api_router.delete("/memory/{memory_id}")
+def delete_user_memory(memory_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    success = delete_memory(db, current_user.id, memory_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Memory not found or access denied")
+    
+    return {"message": "memory purged successfully!"}
+
+@api_router.patch("/memory/{memory_id}")
+def update_user_memory(memory_id: int, updates: MemoryCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    updated_memory = update_memory(
+        db,
+        user_id = current_user.id,
+        memory_id = memory_id,
+        updates = updates.dict(exclude_unset=True)
+    )
+    if not updated_memory:
+        raise HTTPException(status_code=404, detail="Memory not found or access denied")
+    
+    return updated_memory
+
+
+@api_router.post("/upload-doc")
+async def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    contents = await file.read()
+    doc = fitz.open(stream=contents, filetype="pdf")
+
+    full_text = ""
+    for page in doc:
+        full_text += page.get_text()
+
+    result = ingest_text(db, title=file.filename, raw_text=full_text, user_id=current_user.id, source_type="pdf")
+
+    return {"message": "Document ingested successfully!", "details": result}
