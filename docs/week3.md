@@ -75,7 +75,7 @@
 
 ### 🔧 Implementation
 
-*   Created /retrieve endpoint in FastAPI
+*   Created /memories endpoint in FastAPI
     
 *   Connected:
     
