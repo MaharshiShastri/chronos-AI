@@ -111,6 +111,11 @@ https://github.com/user-attachments/assets/8455e350-4e5a-4cbe-a815-e344b07dc772
 
 https://github.com/user-attachments/assets/39f46ce2-95d2-4b98-8a98-f4048687d12d
 
+## Week 3
+
+
+https://github.com/user-attachments/assets/99e635e3-9738-4f43-9bc2-a441ad64abfd
+
 
 
 This demonstrates:
