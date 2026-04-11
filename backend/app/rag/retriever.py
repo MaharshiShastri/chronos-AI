@@ -4,13 +4,24 @@ from app.rag.vector_store import rag_vector_store
 from app.models.models import DocumentChunk
 import numpy as np
 from sentence_transformers import CrossEncoder
+from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
+import torch
 
 class Retriever:
-    def __init__(self, k=15, final_k=3, threshold=2.0):
+    def __init__(self, k=15, final_k=3, threshold=2.0): # Relaxed initial threshold
         self.k = k
         self.final_k = final_k
         self.threshold = threshold 
-        self.rerank_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+        self.rerank_model = CrossEncoder("./models/re-ranker")
+        self.rerank_model.save("./models/re-ranker")
+        self.summarizer_tokenizer = AutoTokenizer.from_pretrained('./models/summarizer')
+        self.summarizer_model = AutoModelForSeq2SeqLM.from_pretrained('./models/summarizer')
+        self.summarizer_model.save_pretrained("./models/summarizer")
+        self.summarizer_tokenizer.save_pretrained("./models/summarizer")
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        print("Running Torch on: ", self.device)
+        self.summarizer_model.to(self.device)
+
 
     def retrieve_context(self, query: str, db: Session):
         # 1. Generate and Flatten Embeddings
@@ -50,7 +61,47 @@ class Retriever:
             if c['score'] > -2.0 # Slightly more lenient than 0 for short queries
         ]
 
-        print(f"DEBUG: Top Re-rank Score: {top_ranked[0]['score'] if top_ranked else 'N/A'}")
-        return final_context
+        compressed_context = self.compress_context(query, final_context)
+
+        return compressed_context
+
+    def compress_context(self, query: str, chunks: list):
+        unique_chunks = list(dict.fromkeys(chunks))
+        compressed_segments = []
+        for chunk in unique_chunks:
+            if(len(chunk.split()) > 50):
+                try:
+                    
+                    input_text = f"summarize: {chunk}"
+                    print("Prompt: ", input_text)
+                    inputs = self.summarizer_tokenizer.encode(
+                        input_text,
+                        return_tensors="pt",
+                        max_length=512,
+                        truncation=True
+                    ).to(self.device)
+
+                    summary_ids = self.summarizer_model.generate(
+                        inputs,
+                        max_length = 100,
+                        min_length = 30,
+                        length_penalty = 2.0,
+                        num_beams = 4,
+                        early_stopping = True
+                    )
+
+                    summary = self.summarizer_tokenzier.decode(
+                        summary_ids[0],
+                        skip_special_tokens=True
+                    )
+
+                    compressed_segments.append(summary)
+                except Exception as e:
+                    print(f"Summarization error: {e}")
+                    compressed_segments.append(chunk)  # Fallback to original chunk if summarization fails
+            else:
+                compressed_segments.append(chunk)
+
+        return compressed_segments
 
 rag_retriever = Retriever()
