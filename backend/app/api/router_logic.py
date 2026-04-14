@@ -31,18 +31,16 @@ def get_db():
 
 def get_rag_context(query: str, db: Session, threshold=0.7):
     try:
-        result = rag_retriever.retrieve_context(query, db)
-        relevant_chunks = []
-        for doc, score in result:
-            if score >= threshold:
-                relevant_chunks.append(doc.page_content)
-            else:
-                print(f"DEBUG: Chunk with score {score} below threshold, skipping.")
+        result, metrics = rag_retriever.retrieve_context(query, db)
+                
+        if not result:
+            return ""
         
-        if not relevant_chunks:
-            return None
-        
-        return "\n---\n".join(relevant_chunks)
+        with open("retrieval_metrics.log", "a") as log_file:
+            log_file.write(json.dumps(metrics) + "\n")
+            print("RAG Retrieval Metrics:", metrics)
+        context_block = "\n--- RELEVANT DOCUMENTS ---\n" + "\n".join(result)
+        return context_block
     
     except Exception as e:
         print(f"RAG RETRIEVAL ERROR: {e}")
@@ -202,11 +200,11 @@ async def chat_stream(request: ChatRequest, db: Session = Depends(get_db), curre
     else:
         conv_id = int(request.conversation_id)
 
-    # 2. RETRIEVE CONTEXT (Do this BEFORE saving the new message to avoid self-matching)
+    # 2. RETRIEVE CONTEXT 
     # Use the retriever as the single source for RAG context
-    relevant_chunks = rag_retriever.retrieve_context(request.message, db)
-    doc_context = "\n---\n".join(relevant_chunks) if relevant_chunks else ""
-    
+    doc_context = get_rag_context(request.message, db)
+    #print(doc_context[:10])
+
     # 3. Save User Message
     chat_service.save_message(db, conv_id, "user", request.message)
     
@@ -215,7 +213,7 @@ async def chat_stream(request: ChatRequest, db: Session = Depends(get_db), curre
     memory_context = ""
     if memories:
         memory_context = "USER FACTS:\n" + "\n".join(
-            [f'-[{m.category}] {m.fact_key}: {m.fact_value}' for m in memories if m.importance >= 3]
+            [f"-[{m.category}] {m.fact_key}: {m.fact_value}" for m in memories if m.importance >= 3]
         )
         
     # 5. Build History
@@ -224,15 +222,14 @@ async def chat_stream(request: ChatRequest, db: Session = Depends(get_db), curre
     # 6. Construct Final Prompt (Unified Context)
     # We use doc_context here which contains the actual text from your PDF chunks
     full_prompt = f"""<|system|>
-You are a helpful assistant. Use the provided context to inform your answer.
+You are a specialized AI collaborator. Answer using the provided context.
+If the information is not in the context, use your general knowledge but mention it.
+Always cite your sources using [Filename] format.
 
-DOCUMENT CONTEXT:
 {doc_context}
-
-MEMORY CONTEXT:
 {memory_context}
 
-CHAT HISTORY:
+--- RECENT CONVERSATION ---
 {history[-5:]}
 
 <|user|>
