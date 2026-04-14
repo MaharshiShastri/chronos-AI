@@ -2,6 +2,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
 from app.api import router_logic
+import os
+from dotenv import load_dotenv
+from huggingface_hub import login
+
+load_dotenv()
+
+login(token=os.getenv("HF_TOKEN"))
 
 app = FastAPI(title = "Mission-control Backend")
 app.add_middleware(
@@ -17,8 +24,5 @@ app.add_middleware(
 #Base.metadata.drop_all(bind=engine) !!<- DO NOT UNCOMMENT UNLESS FORCED TO
 Base.metadata.create_all(bind=engine)
 
-app.include_router(router_logic.api_router) #Let the router file deal with routing to correct endpoint
 
-if __name__ =="__main__":
-    import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port = 8000)
+app.include_router(router_logic.api_router) #Let the router file deal with routing to correct endpoint
