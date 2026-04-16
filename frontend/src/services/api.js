@@ -57,6 +57,17 @@ export const authService = {
     signup: (email, password) => API.post("/signup", {email, password}),
 };
 
+API.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        if(error.response && error.response.status === 401){
+            localStorage.clear();
+            window.location.reload();
+        }
+        return Promise.reject(error);
+    }
+);
+
 export const aiService = {
     // Stream plans
     streamPlan: (task, time_budget, conversationid, mode,  onChunk) => {
