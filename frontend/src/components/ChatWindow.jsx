@@ -214,6 +214,31 @@ useEffect(() => { fetchMemories(); }, []);
 
         console.log("New chat session initialized");
     }
+
+    const handleMasterInput = async() => {
+        if(!input.trim() || loading) return;
+
+        setLoading(true);
+        const userQuery = input;
+
+        try{
+            const isPlanQuery = /plan|steps|schedule|how to|build|create/i.test(userQuery);
+
+            if(isPlanQuery){
+                setView('plan');
+                await handlePlanRequest();
+            }
+            else{
+                setView('chat');
+                await handleChat();
+            }
+        } catch(err){
+            console.error("Routing error:", err);
+        } finally{
+            setLoading(false);
+        }
+    };
+    
     return (
         <div className="flex h-screen bg-[#0a0f1a] text-white font-sans overflow-hidden">
             
@@ -274,7 +299,7 @@ useEffect(() => { fetchMemories(); }, []);
                             messages={messages} 
                             input={input}
                             setInput={setInput} 
-                            onSend={handleChat}
+                            onSend={handleMasterInput}
                             loading={loading}
                             scrollRef={scrollRef}
                             memories={memories} 
@@ -289,7 +314,7 @@ useEffect(() => { fetchMemories(); }, []);
                             planMode={planMode}
                             setPlanMode={setPlanMode}
                             onBack={() => setView('chat')}
-                            onRequestPlan={handlePlanRequest}
+                            onRequestPlan={handleMasterInput}
                             onCompleteExecution={() => setActivePlan(null)} // Returns to original PlanPanel
                             input={input}
                             setInput={setInput}
