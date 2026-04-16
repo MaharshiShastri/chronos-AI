@@ -51,6 +51,18 @@ def get_rag_context(query: str, db: Session, threshold=0.7):
 def root():
     return {"message": "AI Backend Running"}
 
+def identify_intent(text: str) -> str:
+    plan_markers = ["plan", "steps", "schedule", "todo", "organize", "blueprint", "timeline"]
+    text_lower = text.lower()
+
+    if any(marker in text_lower for marker in plan_markers):
+        return "PLAN"
+    
+    if any(char.isdigit() for char in text) and ("min" in text_lower or "hour" in text_lower or "sec" in text_lower):
+        return "PLAN"
+    
+    return "CHAT"
+
 #Retrieve Current user details from token
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     #Recieve the token and check if the ser exists, if user exists, return user details, else return credentials_exception error
@@ -58,6 +70,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     credentials_exception = HTTPException(
         status_code = status.HTTP_401_UNAUTHORIZED,
         detail = "Could not validate credentials",
+        headers = {"WWW-Authenticate": "Bearer"},
     )
 
     try:
@@ -106,6 +119,13 @@ def login(request: UserAuth, db: Session = Depends(get_db)):
     
     access_token = create_access_token(data={"sub": user.email})
     return ({"access_token": access_token, "token_type": "bearer", "user": {"id": user.id,  "email": user.email}})
+
+@api_router.post("/dispatch")
+async def dispatch_request(request: dict, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    user_input = request.get("message")
+    intent = identify_intent(user_input)
+
+    return {"action" : f"REDIRECTING TO {intent}", "intent": intent}
 
 #START of Ordinary conversations with AI functions below for web-equivalent CRUD operations
 #Update the conversation with new prompt from user(buffererd response used for very initial testing)
@@ -308,7 +328,18 @@ def update_title(conversation_id: int, title: str, db: Session = Depends(get_db)
 @api_router.post("/plan")
 async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     raw_steps = []
-        
+    
+    async def self_correct_plan(raw_steps, total_budget):
+        actual_sum = sum(step.get("time_allocated", 0) for step in raw_steps)
+
+        if actual_sum != total_budget:
+            print(f"Correction Triggered: Budget Mismatch({actual_sum} vs {total_budget})")
+            diff = total_budget - actual_sum
+            if raw_steps:
+                raw_steps[-1]["time_allocated"] += diff
+
+        return raw_steps
+    
     context = get_rag_context(request.task, db)
     task_input = request.task
     if context:
@@ -335,7 +366,7 @@ async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_
 
     if not raw_steps:
         return JSONResponse(status_code=400, content={"error": "PLAN_GENERATION_FAILED"})
-
+    self_correct_plan(raw_steps, request.time_budget)
     # 2. SAVE TO DB (Now we have the full list)
     mission_id, enriched = task_service.create_mission_and_steps(
         db, current_user.id, request.task, request.time_budget, raw_steps
@@ -346,9 +377,14 @@ async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_
         try:
             # First, stream the steps for the "Loading" UI one by one
             for step_object in raw_steps:
+                if len(step_object["step"].split()) < 4 or "???" in step_object["step"]: # Basic heuristic to detect vague steps
+                    step_object["intervention_required"] = True
+                    step_object["reason"] = "Description is too vague for autonomous execution."
+
                 print(f"Streaming step: {step_object}")  # Debug log to see the step being streamed
                 yield f"data: {json.dumps({'single_step': step_object, 'status': 'streaming'})}\n\n"
                 await asyncio.sleep(0.1) # Tiny delay so the UI animation looks smooth
+                
 
             # Finally, send the completion signal with the mission_id
             yield f"data: {json.dumps({
@@ -421,7 +457,6 @@ async def start_execution(mission_id: int, db: Session = Depends(get_db)):
         }
         for s in steps
     ]
-
     async def event_generator():
         try:
             yield f"data: {json.dumps({'event': 'MANIFEST', 'steps': manifest})}\n\n"
