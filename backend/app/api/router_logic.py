@@ -344,15 +344,19 @@ async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_
     task_input = request.task
     if context:
         task_input = (f"""
-            TASK: {request.task}\n
-            REFERENCE KNOWLEDGE FROM DOCUMENTS: {context}\n 
-            INSTRUCTION: Use the reference knowledge to make the steps more specific.
+            OBJECTIVE: {request.task}
+    CONTEXT_GATHERED: {context if context else "No specific document context found."}
+    
+    CRITICAL INSTRUCTIONS:
+    1. If the objective is PHYSICAL (e.g., repair, cooking, travel), use hardware/real-world steps.
+    2. If the objective is VIRTUAL (e.g., coding, data analysis, writing), use technical/software steps.
+    3. Do NOT use "Literature Review" or "Integration Testing" for physical repairs.
+    4. Ensure the time budget of {request.time_budget}s is distributed logically.
             """)
     
-    print(f"Task input to plan generator: {task_input}")  # Debug log to check the final input to the plan generator
+    print(f"---\t Task input to plan generator: {task_input}\t---")  # Debug log to check the final input to the plan generator
     try:
         for step in generate_plan(task_input, request.time_budget, request.mode):
-            print(type(step))
             if isinstance(step, str):
                 step = {"step": step, "time_allocated": 60}
             
@@ -366,7 +370,7 @@ async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_
 
     if not raw_steps:
         return JSONResponse(status_code=400, content={"error": "PLAN_GENERATION_FAILED"})
-    self_correct_plan(raw_steps, request.time_budget)
+    raw_steps = await self_correct_plan(raw_steps, request.time_budget)
     # 2. SAVE TO DB (Now we have the full list)
     mission_id, enriched = task_service.create_mission_and_steps(
         db, current_user.id, request.task, request.time_budget, raw_steps
