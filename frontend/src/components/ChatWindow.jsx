@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { aiService } from '../services/api';
-import { Zap, Trash2, Clock, Target, MessageSquare } from 'lucide-react';
+import { Zap, Trash2, Clock, Target, MessageSquare, Terminal, X } from 'lucide-react';
 import VaultPanel from './VaultPanel';
 import ChatPanel from './ChatPanel';
 import PlanPanel from './PlanPanel';
@@ -17,13 +17,20 @@ const ChatWindow = ({ onLogout}) => {
     const [messages, setMessages] = useState([]);
     const [conversations, setConversations] = useState([]);
     const [tasks, setTasks] = useState([]);
+    const [terminalHeight, setTerminalHeight] = useState(128);
+    const isResizing = useRef(false);
 
     // Plan Configuration
     const [timeBudget, setTimeBudget] = useState(600);
     const [planMode, setPlanMode] = useState('fast');
 
     const scrollRef = useRef(null);
-
+    const [liveMetrics, setLiveMetrics] = useState({
+        latency: 0,
+        interrupts: 0,
+        progress: 'IDLE',
+        status: 'STREAMS_READY'
+    });
     // 1. Initial Load: Archive and Task Log
     useEffect(() => {
         const initDashboard = async () => {
@@ -226,7 +233,6 @@ useEffect(() => { fetchMemories(); }, []);
 
             if(isPlanQuery){
                 setView('plan');
-                await handlePlanRequest();
             }
             else{
                 setView('chat');
@@ -239,6 +245,28 @@ useEffect(() => { fetchMemories(); }, []);
         }
     };
     
+    const startResizing = (e) => {
+        isResizing.current = true;
+        document.addEventListener('mousemove', handleResizing);
+        document.addEventListener('mouseup', stopResizing);
+        document.body.style.userSelect = 'none';
+    };
+
+    const handleResizing = (e) => {
+        if(!isResizing.current) return;
+        
+        const newHeight = window.innerHeight - e.clientY;
+        if(newHeight > 100 && newHeight < window.innerHeight * 0.5){
+            setTerminalHeight(newHeight);
+        }
+    };
+
+    const stopResizing = (e) => {
+        isResizing.current = false;
+        document.removeEventListener('mousemove', handleResizing);
+        document.body.style.userSelect = 'auto';
+    };
+
     return (
         <div className="flex h-screen bg-[#0a0f1a] text-white font-sans overflow-hidden">
             
@@ -293,33 +321,63 @@ useEffect(() => { fetchMemories(); }, []);
                 </div>
 
                 {/* CONTENT AREA */}
-                <div className="flex-1 flex flex-col overflow-hidden transition-all duration-500 px-4 pb-4">
-                    {view === 'chat' ? (
-                        <ChatPanel 
-                            messages={messages} 
-                            input={input}
-                            setInput={setInput} 
-                            onSend={handleMasterInput}
-                            loading={loading}
-                            scrollRef={scrollRef}
-                            memories={memories} 
-                            onMemoryChange={fetchMemories}
-                        />
-                    ) : view === 'plan' ? (
-                        <PlanPanel 
-                            activePlan={activePlan} 
-                            loading={loading}
-                            timeBudget={timeBudget}
-                            setTimeBudget={setTimeBudget}
-                            planMode={planMode}
-                            setPlanMode={setPlanMode}
-                            onBack={() => setView('chat')}
-                            onRequestPlan={handleMasterInput}
-                            onCompleteExecution={() => setActivePlan(null)} // Returns to original PlanPanel
-                            input={input}
-                            setInput={setInput}
-                        />
-                    ) : <VaultPanel />}
+                <div key={view} className='flex-1 flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-1000 ease-out'>
+                    <div className="flex-1 flex flex-col overflow-hidden transition-all duration-500 px-4 pb-4">
+                        {view === 'chat' ? (
+                            <ChatPanel 
+                                messages={messages} 
+                                input={input}
+                                setInput={setInput} 
+                                onSend={handleMasterInput}
+                                loading={loading}
+                                scrollRef={scrollRef}
+                                memories={memories} 
+                                onMemoryChange={fetchMemories}
+                            />
+                        ) : view === 'plan' ? (
+                            <PlanPanel 
+                                activePlan={activePlan} 
+                                loading={loading}
+                                timeBudget={timeBudget}
+                                setTimeBudget={setTimeBudget}
+                                planMode={planMode}
+                                setPlanMode={setPlanMode}
+                                onBack={() => setView('chat')}
+                                onRequestPlan={handleMasterInput}
+                                onCompleteExecution={() => setActivePlan(null)} // Returns to original PlanPanel
+                                input={input}
+                                setInput={setInput}
+                                onMetricsUpdate={setLiveMetrics}
+                            />
+                        ) : <VaultPanel />}
+                    </div>
+                </div>
+                <div style={{height: `${terminalHeight}px`}} className="relative bg-black/80 border-t border-slate-800/60 font-mono text-[9px] shrink-0 flex flex-col overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-2 cursor-n-resize z-[100] hover:bg-cyan-500/20 transition-colors" onMouseDown={startResizing} title="Resize Terminal" />
+                    <div className="p-4 overflow-y-auto custom-scrollbar flex-1">
+                        <div className="flex items-center gap-2 mb-3 text-cyan-500/50">
+                            <Terminal size={12} />
+                            <span className="uppercase tracking-widest font-black">RAG_TELEMETRY_STREAM</span>
+                        </div>
+                        <div className="space-y-1">
+                            <p className="text-emerald-500/80">
+                                {`> [RUN_LATENCY]: ${liveMetrics.latency || '0.00'}ms`}
+                            </p>
+                            <p className="text-purple-400">
+                                {`> [STRATEGIC_PAUSES]: ${liveMetrics.interrupts || 'IDLE'}`}
+                            </p>
+                            <p className="text-slate-500">
+                                {`> [MISSION_PROGRESS]: ${liveMetrics.progress}`}
+                            </p>
+                            <p className="text-slate-500">
+                                {`> [SYSTEM_STATUS]: ${liveMetrics.status}`}
+                            </p>
+                            <div className="flex gap-2 text-slate-600 italic">
+                                <span>{`> [MEM_VAL]: ${Math.round(performance.memory?.usedJSHeapSize /1024 / 1024) || '--'} MB`}</span>
+                                <span className="animate-pusle">_</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </main>
 
