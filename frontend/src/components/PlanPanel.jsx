@@ -3,12 +3,12 @@ import NeumorphicCard from './NeumorphicCard';
 import { ChevronLeft, Zap, Target, CheckCircle2, Circle} from 'lucide-react';
 import { aiService } from '../services/api';
 
-const PlanPanel = ({ onBack, input, setInput }) => {
+const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
   // --- UI & CONFIG STATE ---
   const [status, setStatus] = useState('idle'); // 'idle' | 'planning' | 'executing'
   const [timeBudget, setTimeBudget] = useState(600);
   const [planMode, setPlanMode] = useState('fast');
-
+  const [liveMetrics, setLiveMetrics] = useState();
   // --- EXECUTION DATA STATE ---
   const [activeMissionId, setActiveMissionId] = useState(null);
   const [steps, setSteps] = useState([]);
@@ -18,6 +18,7 @@ const PlanPanel = ({ onBack, input, setInput }) => {
   const [isPaused, setIsPaused] = useState(false);
   const [approvalData, setApprovalData] = useState(null);
   const [editableArtifact, setEditableArtifact] = useState("");
+  const [showCompletion, setShowCompletion] = useState(false);
 
   // --- 1. THE PLANNING STREAM ---
   const startPlanning = async () => {
@@ -109,15 +110,38 @@ const PlanPanel = ({ onBack, input, setInput }) => {
           });
           setEditableArtifact(payload.content?.artifact || "");
           break;
+
         case "STEP_COMPLETED":
           console.log(`Step ${payload.index} verified.`);
           setSteps(prev => prev.map((s, i) => i === payload.index ? { ...s, status: 'completed' } : s));
           setApprovalData(null);
           break;
-        case "MISSION_COMPLETED":
+        
+          case "MISSION_COMPLETED":
           setStatus('idle');
           setActiveMissionId(null);
           setSteps([]);
+          onMetricsUpdate(prev => ({ ...prev, status: 'STREAMS_READY', progress: 'DONE' }));
+          break;
+        
+          case "STRATEGIC_INTERRUPT":
+          setIsPaused(true);
+          setApprovalData({
+            step_id: payload.step_id,
+            type: "CLARIFICATION",
+            reason: payload.reason,
+            isStrategic: true // Flag to style it differently in the UI
+          });
+          onMetricsUpdate(prev => ({ ...prev, status: 'AWAITING_CLARIFICATION' }));
+          break;
+        case "TELEMETRY_PULSE":
+          setLiveMetrics(payload.metrics);
+          onMetricsUpdate({
+            latency: payload.metrics.step_latency,
+            interrupts: payload.metrics.interrupt_count,
+            progress: payload.metrics.progress,
+            status: "EXECUTING"
+          });
           break;
       }
     });
@@ -140,7 +164,13 @@ const PlanPanel = ({ onBack, input, setInput }) => {
   };
   const displayTotal = steps.length > 0 ? steps.length : 6;
   const progress = totalStepTime > 0 ? (timeLeft / totalStepTime) * 100 : 0;
-
+  useEffect(() => {
+    if(status === "finished"){
+      setShowCompletion(true);
+      const timer = setTimeout(() => setShowCompletion(false), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [status]);
   // --- RENDER LOGIC ---
   return (
     <div className="flex-1 flex flex-col p-6 h-full overflow-hidden min-h-0">
@@ -156,34 +186,73 @@ const PlanPanel = ({ onBack, input, setInput }) => {
         
         {/* STATE 1: IDLE (Mission Config) */}
         {status === 'idle' && (
-          <div className="p-12 max-w-2xl mx-auto space-y-10 overflow-y-auto custom-scrollbar">
-            <div className="space-y-2">
-              <div className="flex items-center gap-3 text-orange-400">
-                <Target size={24} />
-                <h1 className="text-3xl font-black tracking-tighter uppercase">Mission_Control</h1>
-              </div>
-            </div>
-            <div className="space-y-8 bg-slate-900/40 p-8 rounded-3xl border border-slate-800/50">
-              <textarea 
-                value={input} onChange={(e) => setInput(e.target.value)}
-                placeholder="Enter mission parameters..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-sm text-slate-200 outline-none min-h-[120px] resize-none"
-              />
-              <div className="grid grid-cols-2 gap-8">
-                <div className="space-y-4">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase">Budget: {timeBudget}s</label>
-                  <input type="range" min="60" max="3600" step="60" value={timeBudget} onChange={(e) => setTimeBudget(e.target.value)} className="w-full accent-cyan-500" />
+          <div className="h-full w-full overflow-y-auto overflow-x-hidden custom-scrollbar animate-in fade-in slide-in-from-bottom-4">
+            <div className='p-12 max-w-2xl mx-auto space-y-10'>
+              <div className="space-y-2">
+                <div className="flex items-center gap-3 text-orange-400">
+                  <Target size={24} className="animate-pulse" />
+                  <h1 className="text-3xl font-black tracking-tighter uppercase">Mission_Control</h1>
                 </div>
-                <div className="space-y-4">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase">Mode</label>
-                  <div className="flex gap-2">
-                    {['fast', 'deep'].map(m => (
-                      <button key={m} onClick={() => setPlanMode(m)} className={`flex-1 py-2 rounded-lg text-[9px] font-black uppercase border ${planMode === m ? 'bg-cyan-900/40 text-cyan-400 border-cyan-500/30' : 'bg-slate-900 text-slate-600 border-slate-800'}`}>{m}</button>
-                    ))}
+                <p className="text-[10px] font-mono text-slate-500">READY_FOR_INITIALIZATION</p>
+              </div>
+
+              <div className="space-y-8 bg-slate-900/40 p-8 rounded-3xl border border-slate-800/50 shadow-2xl">
+                {/* THE TRANSFERED INPUT */}
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase ml-2">Objective_Parameters</label>
+                  <textarea 
+                    value={input} 
+                    onChange={(e) => setInput(e.target.value)} // User can edit the chat query here!
+                    placeholder="Enter mission parameters..."
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500/50 rounded-2xl p-4 text-sm text-slate-200 outline-none min-h-[120px] resize-none transition-all font-mono"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-8">
+                  {/* BUDGET SELECTOR */}
+                  <div className="space-y-4">
+                    <div className="flex justify-between">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Budget</label>
+                      <span className="text-[10px] font-mono text-cyan-500">{timeBudget}S</span>
+                    </div>
+                    <input 
+                      type="range" min="60" max="3600" step="60" 
+                      value={timeBudget} 
+                      onChange={(e) => setTimeBudget(e.target.value)} 
+                      className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500" 
+                    />
+                  </div>
+
+                  {/* MODE TOGGLE */}
+                  <div className="space-y-4">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Execution_Heuristics</label>
+                    <div className="flex gap-2 p-1 bg-black/20 rounded-xl border border-slate-800">
+                      {['fast', 'deep'].map(m => (
+                        <button 
+                          key={m} 
+                          onClick={() => setPlanMode(m)} 
+                          className={`flex-1 py-2 rounded-lg text-[9px] font-black uppercase transition-all ${
+                            planMode === m 
+                            ? 'bg-cyan-500 text-black shadow-[0_0_15px_rgba(6,182,212,0.4)]' 
+                            : 'text-slate-500 hover:text-slate-300'
+                          }`}
+                        >
+                          {m}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
+
+                <button 
+                  onClick={startPlanning} 
+                  className="group relative w-full py-4 bg-transparent border-2 border-cyan-500/50 hover:border-cyan-500 overflow-hidden rounded-2xl font-black text-xs uppercase tracking-widest transition-all"
+                >
+                  <div className="absolute inset-0 bg-cyan-500 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
+                  <span className="relative group-hover:text-black transition-colors">Initialize_Strategy_Stream</span>
+                </button>
               </div>
-              <button onClick={startPlanning} className="w-full py-4 bg-cyan-600 hover:bg-cyan-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all">Initialize_Planning_Stream</button>
+              <div className='h-12' />
             </div>
           </div>
         )}
@@ -205,8 +274,8 @@ const PlanPanel = ({ onBack, input, setInput }) => {
 
         {/* STATE 3: EXECUTING */}
         {status === 'executing' && (
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            <div className="p-6 border-b border-slate-800/60 flex justify-between items-center bg-slate-900/20">
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden h-full">
+            <div className="p-6 border-b border-slate-800/60 flex justify-between items-center bg-slate-900/20 shrink-0">
                <div className="flex items-center gap-4">
                   <div className="relative w-12 h-12">
                     <svg className="w-full h-full -rotate-90">
@@ -253,11 +322,26 @@ const PlanPanel = ({ onBack, input, setInput }) => {
                   </div>
                 );
               })}
-              <div className="h-4 w-full" />
+              <div className="h-10 shrink-0 w-full" />
             </div>
           </div>
         )}
       </NeumorphicCard>
+      {showCompletion && (
+      <div className="absolute bottom-4 left-4 right-4 bg-slate-900 border border-emerald-500/50 rounded-xl p-4 shadow-2xl animate-in slide-in-front-from-bottom-4 duration-300 z-[100]">
+        <div className="flex justify-between items-center mb-2">
+          <p className="text-[10px] font-black uppercase text-emerald-400 tracking-widest">
+            {input} is complete in {approvalData?.actual || timeBudget} s.
+          </p>
+          <button onClick ={() => setShowCompletion(false)} className="text-slate-500 hover:text-white">
+            <X size={14} />
+          </button>
+        </div>
+        <div className='h-1 w-full bg-slate-800 rounded-full overflow-hidden'>
+          <div className="h-full bg-emerald-500 animate-shrink-ltr" style={{animetion: "shrink 3s linear forwards"}} />
+        </div>
+      </div>
+    )}
     </div>
   );
 };
