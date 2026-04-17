@@ -1,15 +1,32 @@
 import asyncio
 import time
 from app.services.optimizer import TimeOptimizer
-from sqlalchemy.orm import Session
 import logging
-from app.models import models
+from app.services.ai_service import generate_response
+import json
 
 logger = logging.getLogger(__name__)
 
 def perform_task():
     pass
 
+ACTIVE_MISSIONS = {}
+
+async def evaluate_step_actionability(step_description: str) -> dict:
+    prompt = f"""
+    Evaluate if the following task step is actionable or ambiguous.
+    Step: "{step_description}"
+    
+    If it's actionable (clear what to do), respond with: {{"status": "CLEAR"}}
+    If it's ambiguous (needs paths, keys, or details), respond with: {{"status": "AMBIGUOUS", "reason": "brief explanation"}}
+    
+    Respond ONLY in JSON.
+    """
+    response_text = await generate_response(prompt)
+    try:
+        return json.loads(response_text)
+    except:
+        return {"status": "CLEAR"}
 async def run_mission_retry(step_data, retries=3):
     for attempt in range(retries):
         try:
@@ -25,61 +42,108 @@ async def run_mission_retry(step_data, retries=3):
         
     return {"success": False, "error": "MAX_RETRIES_REACHED"}
 
-async def run_mission_stream(mission_id: int, total_budget: int, db:Session):
-    #Simulating what an agent might do here with time-constraints and dynamic adjustments
-    #executed_steps = []
-    task =  db.query(models.Tasks).filter(models.Tasks.id == mission_id).first()
-    steps = db.query(models.TaskStep).filter(models.TaskStep.task_id == mission_id).order_by(models.TaskStep.order.asc()).all()
-                                                                                             
+async def run_mission_stream(mission_id: int, total_budget: int, manifest: list):
+    metrics = {
+        "steps_completed" : 0,
+        "total_tokens" : 0,
+        "interrupts" : 0
+    }
+    # Store the manifest in the global state so the PATCH route can find it
+    ACTIVE_MISSIONS[mission_id] = manifest
+    
     start_time = time.time()
-    for i, step in enumerate(steps):
-        step_start_marker = time.time()
-        step.status = "started"
-        db.commit()
+    
+    try:
+        for i, step in enumerate(manifest):
+            step_start_marker = time.time()
+            evaluation = await evaluate_step_actionability(step['description'])
+            if evaluation.get('status').lower() == "ambiguous":
+                metrics["interrupts"] += 1
+                step['status'] = 'awaiting_clarification'
+                yield {
+                    "event" : "STRATEGIC_INTERRUPT",
+                    "step_id" : step["backend_step_id"],
+                    "reason" : evaluation.get("reason", "Incomplete instructions detected.")
+                }
 
-        yield{
-            "event": "STEP_STARTED",
-            "index": i,
-            "step_id": step.get("step_id"),
-            "time_remaining": max(0, abs(total_budget - step_start_marker))
+            while step['status'] == "awaiting_clarification":
+                await asyncio.sleep(0.5)
+            # 1. Update In-Memory Status
+            step['status'] = "started"
+            
+            yield {
+                "event": "STEP_STARTED",
+                "index": i,
+                "step_id": step['backend_step_id'], # Fixed: matches router + removed extra comma typo
+                "time_remaining": round(max(0, total_budget - (time.time() - start_time)), 2)
+            }
+
+            # 2. Simulation Logic
+            allocated_time = step['time_allocated']
+            artifact = f"Generated content for: {step['description']}"
+            
+            # 3. Update In-Memory Details
+            step['artifact_content'] = artifact
+            step['status'] = "awaiting_approval"
+
+            await asyncio.sleep(min(allocated_time, 2))
+
+            actual_duration = time.time() - step_start_marker
+            metrics["steps_completed"] += 1
+            yield {
+                "event" : "TELEMETRY_PULSE",
+                "metrics" : {
+                    "step_latency": round(actual_duration * 1000, 2),
+                    "interrupt_count": metrics["interrupts"],
+                    "progress": f"{metrics['steps_completed']}/{len(manifest)}"
+                }
+            }
+            step['actual_duration'] = actual_duration
+            drift = actual_duration - allocated_time
+
+            yield {
+                "event": "REQUIRE_APPROVAL",
+                "index": i,
+                "step_id": step['backend_step_id'],
+                "content": {
+                    "artifact": artifact, 
+                    "time_needed": round(actual_duration, 2), 
+                    "drift": round(drift, 2) if drift > 0 else 0
+                },
+                "instructions": "Please approve or provide feedback."
+            }
+            
+            # 4. THE IN-MEMORY APPROVAL LOOP (No DB polling)
+            timeout_counter = 0
+            approved = False
+            while not approved:
+                await asyncio.sleep(0.5) 
+                # The PATCH route will change this value in the global ACTIVE_MISSIONS
+                current_status = step.get('status', '').lower()
+                if current_status in ["completed", "refined", "approved", "done"]:
+                    approved = True
+                timeout_counter += 1
+                if timeout_counter > 1200: 
+                    break
+
+            yield {
+                "event": "STEP_COMPLETED",
+                "index": i,
+                "actual_duration": round(actual_duration, 0)
+            }
+
+        # 5. Finalize Mission - This is where the DB is finally touched
+        yield {
+            "event": "MISSION_COMPLETED", 
+            "mission_id": mission_id, 
+            "time_completion": round(time.time() - start_time, 0),
+            "metrics": {
+                "execution_time": f"{round(time.time() - start_time, 2)}s",
+                "interrupt_count": metrics["interrupts"],
+            }
         }
 
-        allocated_time = step["time_allocated"]
-        artifact = f"Generated content for: {step['step']}" #The actual task would done via this line
-        step.artifact_content = artifact
-        step.status = "awaiting_approval"
-
-        await asyncio.sleep(min(allocated_time, 2))
-
-        actual_duration = time.time() - step_start_marker
-        step.actual_duration = actual_duration
-        drift = actual_duration - allocated_time
-
-        yield{
-            "event": "REQUIRE_APPROVAL",
-            "index": i,
-            "step_id": step.backend_step_id,
-            'content': {"artifact": artifact or "Testing", "time_needed": actual_duration, "drift": drift if drift > 0 else 0},
-            "instructions": "Please approve or provide feedback to refine this step."
-        }
-        
-        approved = False
-        while not approved:
-            await asyncio.sleep(1)
-            db.refresh(step)
-            if step.status.lower() in ["completed", "refined"]:
-                approved = True
-
-        if(drift > 0):
-            steps = TimeOptimizer.calculate_drift_correction(steps, i, drift)
-
-        yield{
-            "event": "STEP_COMPLETED",
-            "index": i,
-            "actual_duration": round(actual_duration, 2),
-            "updated_steps": steps
-        }
-
-    task.status = "completed"
-    db.commit()
-    yield{"event":"MISSION_COMPLETED", "mission_id": mission_id}
+    finally:
+        # Cleanup global memory when stream closes or finishes
+        if mission_id in ACTIVE_MISSIONS:
+            del ACTIVE_MISSIONS[mission_id]
