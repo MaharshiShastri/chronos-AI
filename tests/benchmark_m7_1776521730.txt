@@ -1,0 +1,116 @@
+🚀 MISSION 7 BENCHMARK: 100 USERS
+ID    | STATUS     | LATENCY    | EVENTS   | ERRORS
+-----------------------------------------------------------------
+0     | ✅ PASS     |   85.03s   | 2        | 
+1     | ✅ PASS     |   83.95s   | 2        | 
+75    | ❌ FAIL     | N/A        | 0        | 
+18    | ❌ FAIL     | N/A        | 0        | 
+26    | ❌ FAIL     | N/A        | 0        | 
+11    | ❌ FAIL     | N/A        | 0        | 
+48    | ❌ FAIL     | N/A        | 0        | 
+59    | ❌ FAIL     | N/A        | 0        | 
+49    | ❌ FAIL     | N/A        | 0        | 
+47    | ❌ FAIL     | N/A        | 0        | 
+27    | ❌ FAIL     | N/A        | 0        | 
+17    | ❌ FAIL     | N/A        | 0        | 
+44    | ❌ FAIL     | N/A        | 0        | 
+50    | ❌ FAIL     | N/A        | 0        | 
+74    | ❌ FAIL     | N/A        | 0        | 
+53    | ❌ FAIL     | N/A        | 0        | 
+52    | ❌ FAIL     | N/A        | 0        | 
+6     | ❌ FAIL     | N/A        | 0        | 
+15    | ❌ FAIL     | N/A        | 0        | 
+25    | ❌ FAIL     | N/A        | 0        | 
+56    | ❌ FAIL     | N/A        | 0        | 
+54    | ❌ FAIL     | N/A        | 0        | 
+5     | ❌ FAIL     | N/A        | 0        | 
+57    | ❌ FAIL     | N/A        | 0        | 
+55    | ❌ FAIL     | N/A        | 0        | 
+4     | ❌ FAIL     | N/A        | 0        | 
+12    | ❌ FAIL     | N/A        | 0        | 
+51    | ❌ FAIL     | N/A        | 0        | 
+43    | ❌ FAIL     | N/A        | 0        | 
+8     | ❌ FAIL     | N/A        | 0        | 
+28    | ❌ FAIL     | N/A        | 0        | 
+58    | ❌ FAIL     | N/A        | 0        | 
+10    | ❌ FAIL     | N/A        | 0        | 
+22    | ❌ FAIL     | N/A        | 0        | 
+23    | ❌ FAIL     | N/A        | 0        | 
+62    | ❌ FAIL     | N/A        | 0        | 
+64    | ❌ FAIL     | N/A        | 0        | 
+9     | ❌ FAIL     | N/A        | 0        | 
+65    | ❌ FAIL     | N/A        | 0        | 
+63    | ❌ FAIL     | N/A        | 0        | 
+7     | ❌ FAIL     | N/A        | 0        | 
+21    | ❌ FAIL     | N/A        | 0        | 
+61    | ❌ FAIL     | N/A        | 0        | 
+66    | ❌ FAIL     | N/A        | 0        | 
+3     | ❌ FAIL     | N/A        | 0        | 
+69    | ❌ FAIL     | N/A        | 0        | 
+68    | ❌ FAIL     | N/A        | 0        | 
+2     | ❌ FAIL     | N/A        | 0        | 
+20    | ❌ FAIL     | N/A        | 0        | 
+19    | ❌ FAIL     | N/A        | 0        | 
+72    | ❌ FAIL     | N/A        | 0        | 
+70    | ❌ FAIL     | N/A        | 0        | 
+14    | ❌ FAIL     | N/A        | 0        | 
+73    | ❌ FAIL     | N/A        | 0        | 
+71    | ❌ FAIL     | N/A        | 0        | 
+13    | ❌ FAIL     | N/A        | 0        | 
+24    | ❌ FAIL     | N/A        | 0        | 
+67    | ❌ FAIL     | N/A        | 0        | 
+60    | ❌ FAIL     | N/A        | 0        | 
+16    | ❌ FAIL     | N/A        | 0        | 
+76    | ❌ FAIL     | N/A        | 0        | 
+46    | ❌ FAIL     | N/A        | 0        | 
+45    | ❌ FAIL     | N/A        | 0        | 
+85    | ❌ FAIL     | N/A        | 0        | 
+98    | ❌ FAIL     | N/A        | 0        | 
+37    | ❌ FAIL     | N/A        | 0        | 
+34    | ❌ FAIL     | N/A        | 0        | 
+42    | ❌ FAIL     | N/A        | 0        | 
+38    | ❌ FAIL     | N/A        | 0        | 
+29    | ❌ FAIL     | N/A        | 0        | 
+35    | ❌ FAIL     | N/A        | 0        | 
+99    | ❌ FAIL     | N/A        | 0        | 
+78    | ❌ FAIL     | N/A        | 0        | 
+77    | ❌ FAIL     | N/A        | 0        | 
+91    | ❌ FAIL     | N/A        | 0        | 
+82    | ❌ FAIL     | N/A        | 0        | 
+88    | ❌ FAIL     | N/A        | 0        | 
+97    | ❌ FAIL     | N/A        | 0        | 
+86    | ❌ FAIL     | N/A        | 0        | 
+84    | ❌ FAIL     | N/A        | 0        | 
+89    | ❌ FAIL     | N/A        | 0        | 
+93    | ❌ FAIL     | N/A        | 0        | 
+87    | ❌ FAIL     | N/A        | 0        | 
+96    | ❌ FAIL     | N/A        | 0        | 
+92    | ❌ FAIL     | N/A        | 0        | 
+95    | ❌ FAIL     | N/A        | 0        | 
+33    | ❌ FAIL     | N/A        | 0        | 
+30    | ❌ FAIL     | N/A        | 0        | 
+41    | ❌ FAIL     | N/A        | 0        | 
+39    | ❌ FAIL     | N/A        | 0        | 
+80    | ❌ FAIL     | N/A        | 0        | 
+94    | ❌ FAIL     | N/A        | 0        | 
+83    | ❌ FAIL     | N/A        | 0        | 
+32    | ❌ FAIL     | N/A        | 0        | 
+31    | ❌ FAIL     | N/A        | 0        | 
+36    | ❌ FAIL     | N/A        | 0        | 
+40    | ❌ FAIL     | N/A        | 0        | 
+79    | ❌ FAIL     | N/A        | 0        | 
+81    | ❌ FAIL     | N/A        | 0        | 
+90    | ❌ FAIL     | N/A        | 0        | 
+-----------------------------------------------------------------
+
+========================================
+       FINAL PERFORMANCE REPORT
+========================================
+Total Users:      100
+Success Rate:     2.0%
+P50 Latency:      84.49s
+P99 Latency:      85.03s
+Throughput:       5.92 req/sec (adj)
+========================================
+
+engine = create_engine(DATABASE_URL)
