@@ -11,7 +11,7 @@ The following data proves a critical thesis: **The Chronos-AI codebase is effect
 
 #### 1\. The Baseline Benchmark (100 Users)
 
-**Source:** [benchmark\_m7\_1776524119.txt]((https://github.com/MaharshiShastri/chronos-AI/blob/main/tests/benchmark_m7_1776525119.txt))
+**Source:** [benchmark\_m7\_1776524119.txt](https://github.com/MaharshiShastri/chronos-AI/blob/main/tests/benchmark_m7_1776525119.txt)
 
 *   **Success Rate:** 100.0% under initial heavy load.
     
