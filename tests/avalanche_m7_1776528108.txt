@@ -1,0 +1,4 @@
+⚡ STARTING AVALANCHE TEST: Initial 50 Users
+💥 FAILURE DETECTED at 788 total requests: 
+🛑 System breakdown confirmed. Terminating avalanche...
+timeout=210 seconds(3 minutes)
