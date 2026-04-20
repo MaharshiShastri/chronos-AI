@@ -31,6 +31,12 @@ const ChatWindow = ({ onLogout}) => {
         progress: 'IDLE',
         status: 'STREAMS_READY'
     });
+    const validateInput = (text) => {
+        if (text.length > 1000) return {valid: false, error: "INPUT_TOO_LONG: Limit is 1000 characters"};
+        if(/[<>{}\[\]]/.test(text)) return {valid: false, error: "INVALID_CHARACTERS: Special characters detected."};
+        return {valid: true}
+    };
+
     // 1. Initial Load: Archive and Task Log
     useEffect(() => {
         const initDashboard = async () => {
@@ -76,7 +82,11 @@ const ChatWindow = ({ onLogout}) => {
         
         const currentInput = input;
         const currentId = localStorage.getItem("current_conv_id");
-        
+        const check = validateInput(currentInput);
+        if (!check.valid) {
+            alert(check.error);
+            return;
+        }
         // Optimistic UI update
         setMessages(prev => [...prev, { role: 'user', content: currentInput }, { role: 'ai', content: '' }]);
         setInput('');
@@ -113,7 +123,11 @@ useEffect(() => { fetchMemories(); }, []);
     // 5. Plan Logic 
     const handlePlanRequest = async () => {
     if (!input.trim() || loading) return;
-    
+    const check = validateInput(input);
+        if (!check.valid) {
+            alert(check.error);
+            return;
+        }
     setLoading(true);
     // Initialize with empty steps
     setActivePlan({ mission_id: null, steps: [] });
@@ -266,7 +280,7 @@ useEffect(() => { fetchMemories(); }, []);
         document.removeEventListener('mousemove', handleResizing);
         document.body.style.userSelect = 'auto';
     };
-
+    
     return (
         <div className="flex h-screen bg-[#0a0f1a] text-white font-sans overflow-hidden">
             
