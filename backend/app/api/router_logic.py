@@ -5,6 +5,10 @@ from jose import jwt, JWTError
 import json
 import asyncio
 import fitz
+import os
+import time
+import psutil
+import logging
 
 # Internal Imports (User-defined modules and methods)
 from database import SessionLocal
@@ -21,6 +25,8 @@ from app.services.memory_service import get_memories, add_memory, delete_memory,
 
 api_router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def get_db():
     db = SessionLocal()
@@ -29,13 +35,19 @@ def get_db():
     finally:
         db.close()
 
-def get_rag_context(query: str, db: Session, threshold=0.7):
+def get_rag_context(query: str, db: Session):
     try:
-        result, metrics = rag_retriever.retrieve_context(query, db)
+        cpu_load = psutil.cpu_percent()
+        degraded_mode = cpu_load > 75.0
+        if degraded_mode:
+            print(f"GRACEFUL DEGRADATION: High CPU ({cpu_load}%), bypassing T5.")
+
+        result, metrics = rag_retriever.retrieve_context(query, db, bypass_summarization=degraded_mode)
                 
         if not result:
             return ""
         
+        metrics['system_cpu'] = cpu_load
         with open("retrieval_metrics.log", "a") as log_file:
             log_file.write(json.dumps(metrics) + "\n")
             print("RAG Retrieval Metrics:", metrics)
@@ -46,32 +58,32 @@ def get_rag_context(query: str, db: Session, threshold=0.7):
         print(f"RAG RETRIEVAL ERROR: {e}")
     return None
 
-    
-@api_router.get("/")
-def root():
-    return {"message": "AI Backend Running"}
-
-def identify_intent(text: str) -> str:
-    plan_markers = ["plan", "steps", "schedule", "todo", "organize", "blueprint", "timeline"]
-    text_lower = text.lower()
-
-    if any(marker in text_lower for marker in plan_markers):
-        return "PLAN"
-    
-    if any(char.isdigit() for char in text) and ("min" in text_lower or "hour" in text_lower or "sec" in text_lower):
-        return "PLAN"
-    
-    return "CHAT"
+def classify_failure(error_type: str, detail: str = ""):
+    """
+    Standardizes error responses across the system for stress-test auditing.
+    """
+    mapping = {
+        # --- IDENTITY & SECURITY ---
+        "UNAUTHORIZED_ACCESS": {"code": "ERR_AUTH_403", "severity": "CRITICAL", "retry": False},
+        "SESSION_EXPIRED": {"code": "ERR_AUTH_401", "severity": "HIGH", "retry": False},
+        
+        # --- RESOURCE & INFRASTRUCTURE ---
+        "RESOURCE_STARVATION": {"code": "ERR_SYS_EXHAUSTED", "severity": "CRITICAL", "retry": True},
+        "LLM_LATENCY": {"code": "ERR_OLLAMA_TIMEOUT", "severity": "HIGH", "retry": True},
+        
+        # --- LOGIC & DATA ---
+        "GROUNDING_VIOLATION": {"code": "ERR_FACTUAL_DIVERGENCE", "severity": "CRITICAL", "retry": False},
+        "RAG_SILENCE": {"code": "ERR_CONTEXT_MISSING", "severity": "LOW", "retry": True},
+        "PLAN_GEN_FAILED": {"code": "ERR_STRUCTURAL_INTEGRITY", "severity": "MEDIUM", "retry": True}
+    }
+    meta = mapping.get(error_type, {"code": "ERR_UNKNOWN", "severity": "UNKNOWN", "retry": False})
+    return {"error": meta, "detail": detail, "timestamp": time.time()}
 
 #Retrieve Current user details from token
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     #Recieve the token and check if the ser exists, if user exists, return user details, else return credentials_exception error
     
-    credentials_exception = HTTPException(
-        status_code = status.HTTP_401_UNAUTHORIZED,
-        detail = "Could not validate credentials",
-        headers = {"WWW-Authenticate": "Bearer"},
-    )
+    credentials_exception = JSONResponse(status_code=401, content=classify_failure("UNAUTHORIZED_ACCESS", detail="Unauthorized access to user."))
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -87,6 +99,10 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise credentials_exception
     
     return user
+
+@api_router.get("/")
+def root():
+    return {"message": "AI Backend Running"}
 
 #Signup page
 @api_router.post("/signup")
@@ -119,13 +135,6 @@ def login(request: UserAuth, db: Session = Depends(get_db)):
     
     access_token = create_access_token(data={"sub": user.email})
     return ({"access_token": access_token, "token_type": "bearer", "user": {"id": user.id,  "email": user.email}})
-
-@api_router.post("/dispatch")
-async def dispatch_request(request: dict, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
-    user_input = request.get("message")
-    intent = identify_intent(user_input)
-
-    return {"action" : f"REDIRECTING TO {intent}", "intent": intent}
 
 #START of Ordinary conversations with AI functions below for web-equivalent CRUD operations
 #Update the conversation with new prompt from user(buffererd response used for very initial testing)
@@ -222,8 +231,13 @@ async def chat_stream(request: ChatRequest, db: Session = Depends(get_db), curre
 
     # 2. RETRIEVE CONTEXT 
     # Use the retriever as the single source for RAG context
-    doc_context = get_rag_context(request.message, db)
-    #print(doc_context[:10])
+    try:
+        doc_context = get_rag_context(request.message, db)
+        #print(doc_context[:10])
+        if not doc_context and request.message.startswith("@doc"):
+            print(classify_failure("RAG_SILENCE", "Query Explicitly requested docs but not found."))
+    except Exception as e:
+        return JSONResponse(status_code=500, content=classify_failure("DB_CONTENT", str(e)))
 
     # 3. Save User Message
     chat_service.save_message(db, conv_id, "user", request.message)
@@ -328,6 +342,11 @@ def update_title(conversation_id: int, title: str, db: Session = Depends(get_db)
 @api_router.post("/plan")
 async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     raw_steps = []
+    cpu_usage = psutil.cpu_percent()
+    ram_usage = psutil.virtual_memory().percent
+    
+    if cpu_usage > 90 or ram_usage > 95:
+        return JSONResponse(status_code=503, content=classify_failure("RESOURCE_STARTVATION", f"CPU: {cpu_usage}%, RAM: {ram_usage}%"))
     
     async def self_correct_plan(raw_steps, total_budget):
         actual_sum = sum(step.get("time_allocated", 0) for step in raw_steps)
@@ -341,35 +360,27 @@ async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_
         return raw_steps
     
     context = get_rag_context(request.task, db)
-    task_input = request.task
-    if context:
-        task_input = (f"""
-            OBJECTIVE: {request.task}
-    CONTEXT_GATHERED: {context if context else "No specific document context found."}
     
-    CRITICAL INSTRUCTIONS:
-    1. If the objective is PHYSICAL (e.g., repair, cooking, travel), use hardware/real-world steps.
-    2. If the objective is VIRTUAL (e.g., coding, data analysis, writing), use technical/software steps.
-    3. Do NOT use "Literature Review" or "Integration Testing" for physical repairs.
-    4. Ensure the time budget of {request.time_budget}s is distributed logically.
-            """)
-    
-    print(f"---\t Task input to plan generator: {task_input}\t---")  # Debug log to check the final input to the plan generator
     try:
-        for step in generate_plan(task_input, request.time_budget, request.mode):
+        start_time = time.time()
+        for step in generate_plan(request.task, request.time_budget, request.mode, context):
+            if time.time() - start_time > 45:
+                return JSONResponse(status_code=504, content=classify_failure("LLM_TIMEOUT", "Plan Generation exceeded 45s SLA."))
+            
             if isinstance(step, str):
                 step = {"step": step, "time_allocated": 60}
             
             if isinstance(step, dict) and "error" in step:
-                return JSONResponse(status_code=500, content=step)
+                return JSONResponse(status_code=422, content=classify_failure("PLAN_GEN_FAILED", step['error']))
             
             raw_steps.append(step)
-            print(raw_steps)
+            #print(raw_steps)
+
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content=classify_failure("PLAN_GEN_FAILED", str(e)))
 
     if not raw_steps:
-        return JSONResponse(status_code=400, content={"error": "PLAN_GENERATION_FAILED"})
+        return JSONResponse(status_code=400, content=classify_failure("PLAN_GEN_FAILED", "Generator returned empty sequence."))
     raw_steps = await self_correct_plan(raw_steps, request.time_budget)
     # 2. SAVE TO DB (Now we have the full list)
     mission_id, enriched = task_service.create_mission_and_steps(
@@ -441,7 +452,7 @@ def update_task_status(task_id: int, data: StatusUpdate, db: Session = Depends(g
 
 #Read funtion of web-equivalent
 @api_router.get("/execute/{mission_id}")
-async def start_execution(mission_id: int, db: Session = Depends(get_db)):
+async def start_execution(mission_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     #Once the step is approved, execute it here, remove from current list of steps
     #Do this until the entire task list is completed
 
@@ -449,6 +460,12 @@ async def start_execution(mission_id: int, db: Session = Depends(get_db)):
     if not task:
         raise HTTPException(status_code=404, detail="Mission not found")
 
+    if task.user_id != current_user.id:
+        logger.warning(f"SECURITY ALERT: User {current_user.id} tried to access Task {mission_id}")
+        return JSONResponse(
+            status_code=403, 
+            content=classify_failure("UNAUTHORIZED_ACCESS", "Mission ownership mismatch.")
+        )
     steps = db.query(models.TaskStep).filter(models.TaskStep.task_id == mission_id).all()
     manifest = [
         {
@@ -569,3 +586,16 @@ async def upload_document(file: UploadFile = File(...), db: Session = Depends(ge
     result = ingest_text(db, title=file.filename, raw_text=full_text, user_id=current_user.id, source_type="pdf")
 
     return {"message": "Document ingested successfully!", "details": result}
+
+@api_router.post("/mission/{mission_id}/archive-logs")
+async def archive_logs(mission_id: int, data: dict):
+    log_dir = "logs/missions"
+    os.makedirs(log_dir, exist_ok=True)
+    
+    file_path = f"{log_dir}/mission_{mission_id}.txt"
+    with open(file_path, "a") as f:
+        f.write(f"\n--- SESSION ARCHIVE: {time.ctime()} ---\n")
+        f.write(data['terminal_output'])
+        f.write("\n--- END OF SESSION ---\n")
+        
+    return {"status": "archived", "path": file_path}
