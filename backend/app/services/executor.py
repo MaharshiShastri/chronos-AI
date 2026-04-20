@@ -1,9 +1,9 @@
 import asyncio
 import time
-from app.services.optimizer import TimeOptimizer
 import logging
-from app.services.ai_service import generate_response
 import json
+from app.services.optimizer import TimeOptimizer
+from app.services.ai_service import generate_stream
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +11,16 @@ def perform_task():
     pass
 
 ACTIVE_MISSIONS = {}
+
+async def safe_json_parse(text: str, default: dict) -> dict:
+    try:
+        clean_text = text.replace("```json", "").replace("```", "").strip()
+        return json.loads(clean_text)
+
+    except (json.JSONDecodeError, AttributeError) as e:
+        logger.error(f"LLM payload malformed: {e} | Raw: {text}")
+        return default
+    
 
 async def evaluate_step_actionability(step_description: str) -> dict:
     prompt = f"""
@@ -20,13 +30,16 @@ async def evaluate_step_actionability(step_description: str) -> dict:
     If it's actionable (clear what to do), respond with: {{"status": "CLEAR"}}
     If it's ambiguous (needs paths, keys, or details), respond with: {{"status": "AMBIGUOUS", "reason": "brief explanation"}}
     
-    Respond ONLY in JSON.
+    Respond ONLY in JSON: {{\"status\": \"CLEAR\"}} or {{\"status\": \"AMBIGUOUS\", \"reason\": \"...\"}}.
     """
-    response_text = await generate_response(prompt)
+    
     try:
-        return json.loads(response_text)
-    except:
+        response_text = await generate_stream(prompt)
+        return await safe_json_parse(response_text, {"status": "CLEAR"})
+    except asyncio.TimeoutError:
         return {"status": "CLEAR"}
+
+
 async def run_mission_retry(step_data, retries=3):
     for attempt in range(retries):
         try:
@@ -50,24 +63,39 @@ async def run_mission_stream(mission_id: int, total_budget: int, manifest: list)
     }
     # Store the manifest in the global state so the PATCH route can find it
     ACTIVE_MISSIONS[mission_id] = manifest
-    
     start_time = time.time()
     
     try:
         for i, step in enumerate(manifest):
-            step_start_marker = time.time()
-            evaluation = await evaluate_step_actionability(step['description'])
-            if evaluation.get('status').lower() == "ambiguous":
-                metrics["interrupts"] += 1
-                step['status'] = 'awaiting_clarification'
-                yield {
-                    "event" : "STRATEGIC_INTERRUPT",
-                    "step_id" : step["backend_step_id"],
-                    "reason" : evaluation.get("reason", "Incomplete instructions detected.")
-                }
+            elapsed_time = time.time() - start_time
+            manifest = TimeOptimizer.rebalance_manifest(manifest, i-1, float(total_budget), float(elapsed_time))
+            strategy = TimeOptimizer.get_execution_strategy(float(total_budget), float(elapsed_time))
 
-            while step['status'] == "awaiting_clarification":
-                await asyncio.sleep(0.5)
+            if elapsed_time >= total_budget:
+                yield{"event":"MISSION_TERMINATED", "reason" : 'HARD_BUDGET_EXCEEDED'}
+                return
+            
+            step_start_marker = time.time()
+            if strategy == "NORMAL":
+                evaluation = await evaluate_step_actionability(step['description'])
+                if evaluation.get('status').lower() == "ambiguous":
+                    metrics["interrupts"] += 1
+                    step['status'] = 'awaiting_clarification'
+                    yield {
+                        "event" : "STRATEGIC_INTERRUPT",
+                        "step_id" : step["backend_step_id"],
+                        "reason" : evaluation.get("reason", "Incomplete instructions detected.")
+                    }
+
+                    wait_time = time.time()
+                    while step['status'] == "awaiting_clarification":
+                        await asyncio.sleep(1)
+                        if(time.time() - wait_time) > 300:
+                            step['status'] = "timed_out"
+                            yield {"event" : "TIMEOUT_ABORT", "reason":"No user response for 5 minutes"}
+                            return 
+
+            
             # 1. Update In-Memory Status
             step['status'] = "started"
             
@@ -100,7 +128,7 @@ async def run_mission_stream(mission_id: int, total_budget: int, manifest: list)
             }
             step['actual_duration'] = actual_duration
             drift = actual_duration - allocated_time
-
+            
             yield {
                 "event": "REQUIRE_APPROVAL",
                 "index": i,
@@ -114,18 +142,18 @@ async def run_mission_stream(mission_id: int, total_budget: int, manifest: list)
             }
             
             # 4. THE IN-MEMORY APPROVAL LOOP (No DB polling)
-            timeout_counter = 0
-            approved = False
-            while not approved:
-                await asyncio.sleep(0.5) 
-                # The PATCH route will change this value in the global ACTIVE_MISSIONS
-                current_status = step.get('status', '').lower()
-                if current_status in ["completed", "refined", "approved", "done"]:
-                    approved = True
-                timeout_counter += 1
-                if timeout_counter > 1200: 
-                    break
-
+            approval_window = 60 if strategy == "NORMAL" else 10
+            if strategy == 'EMERGENCY':
+                step['status'] = 'completed'
+                logger.info(f'Auto-approving step {i} due to human inactivity.')
+            else:
+                approval_start = time.time()
+                while step['status'] == "awaiting_approval":
+                    await asyncio.sleep(1) 
+                    if(time.time() - approval_start) > approval_window:
+                        step['status'] = 'completed'
+                        logger.info(f'Auto-approving step {i} due to human inactivity.')
+                
             yield {
                 "event": "STEP_COMPLETED",
                 "index": i,
