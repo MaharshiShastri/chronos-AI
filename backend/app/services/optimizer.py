@@ -1,16 +1,27 @@
 class TimeOptimizer:
     @staticmethod
-    def calculate_drift_correction(steps, current_index, time_overrun):
-        remaining_steps = steps[current_index + 1:]
-        if not remaining_steps or time_overrun == 0:
-            return steps
+    def get_execution_strategy(total_budget: float, elapsed_time: float) -> str:
+        if total_budget <= 0: return "EMERGENCY"
+        percent_used = (elapsed_time / total_budget) if total_budget > 0 else 1.0
 
-        total_remaining_time = sum(s["time_allocated"] for s in remaining_steps)
+        if percent_used > 0.9:  return 'EMERGENCY'
+        if percent_used > 0.7:  return 'CRITICAL'
+        return "NORMAL"
+    
+    @staticmethod
+    def rebalance_manifest(manifest: list, current_index: int, total_budget: float, elapsed_time: float):
+        remaining_budget = total_budget - elapsed_time
+        remaining_steps = manifest[current_index+1:]
 
-        for step in remaining_steps:
-            proportion = step["time_allocated"] / total_remaining_time
-            reduction = int(proportion * time_overrun)
+        if not remaining_budget:
+            return manifest
+        
+        current_planned_remaining = sum(s['time_allocated'] for s in remaining_steps)
 
-            step["time_allocated"] = max(5, step["time_allocated"] - reduction)
+        if remaining_budget < current_planned_remaining:
+            ratio = max(0.1, remaining_budget / current_planned_remaining)
 
-        return steps
+            for step in remaining_steps:
+                step['time_allocated'] = max(5, int(step['time_allocated'] * ratio))
+
+        return manifest
