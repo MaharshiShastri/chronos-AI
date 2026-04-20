@@ -4,12 +4,15 @@ import subprocess
 import time
 import os
 import logging
+import re
+import traceback
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "llama3.2:3b"
-temperature = 0.2
+MODEL_NAME = "llama3.2:1b"
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 def ollama_running():
     try:
         requests.get("http://localhost:11434/", timeout=2)
@@ -24,6 +27,16 @@ def ollama_running():
             print("Error: 'ollama' command not found. Please install ollama")
 
 ollama_running() #To initialize ollama server on its own
+
+def verify_grounding(output: str, context: str) -> float:
+    if not context: return 1.0
+
+    out_words = set(re.findall(r'\w+', output.lower()))
+    ctx_words = set(re.findall(r'\w+', context.lower()))
+
+    overlap = out_words.intersection(ctx_words)
+
+    return len(overlap) / max(len(out_words), 1)
 
 def generate_response(prompt) -> str:
     try:
@@ -52,68 +65,115 @@ def generate_response(prompt) -> str:
         logger.error(f"Request failed: {e}")
         return {"success": False, "data": None, "error": "REQUEST_TIMEOUT"}
 
-def generate_plan(task: str, total_time: int, mode: str):
+def get_strategy_time(total_time):
+    if total_time < 300:
+        return "COMPRESSED_MODE: Combine tasks, skip deep verification, prioritize speed."
+    elif total_time > 3600:
+        return "DEEP_REASONING: Add validation sub-steps, perform exhaustive search, prioritize accuracy."
+    return "BALANCED_MODE: Output a clear plan with some validation, but keep it concise and actionable."
+
+def generate_plan(task: str, total_time: int, mode: str, context: str=""):
+    # Prompt optimized to force a clear, repeatable structure
     prompt = f"""[INST] <<SYS>>
-You are a project management assistant. 
-Output ONLY a JSON array containing EXACTLY 5 to 7 objects.
-Each object must have "step" and "time_allocated".
-The sum of all "time_allocated" values MUST be exactly {total_time}.
+You are the STRATEGIC_AI_PLANNER. Decompose the objective into multi-step chronological phases.
+GROUND REQUIRMENT: Base steps ONLY on the provided context IF available.
+{f"CONTEXT: {context}" if context else ""}
+STRICT JSON FORMAT:
+{{
+  "steps": [
+    {{"step": "Step 1 description", "time_allocated": 100}},
+    {{"step": "Step 2 description", "time_allocated": 100}}
+  ]
+}}
+Sum of time_allocated must be {total_time}. No prose.
 <</SYS>>
+MISSION_OBJECTIVE: "{task}"
+TOTAL_TEMPORAL_BUDGET: {total_time}
+MODE: {mode}
+STRATEGY_TIME: {get_strategy_time(total_time)}.
+GENERATE_SEQUENCE_NOW: [/INST]"""
 
-Task: "{task}"
-Total Time: {total_time} seconds
-
-Example of 5 steps adding to {total_time}:
-[
-  {{"step": "Step 1...", "time_allocated": {total_time // 5}}},
-  {{"step": "Step 2...", "time_allocated": {total_time // 5}}},
-  ...
-]
-
-JSON Array:
-[/INST]"""
-    buffer = ""
     try:
+        start_request = time.perf_counter()
         response = requests.post(
             OLLAMA_URL,
             json={
                 "model": MODEL_NAME,
                 "prompt": prompt,
                 "format": "json", 
-                "temperature": temperature,
-                "num_predict": 1000, 
-                "stream": True
+                "stream": False 
             },
-            timeout=180,
-            stream=True
+            timeout=1800
         )
+        if(time.perf_counter() - start_request) > 60:
+            logger.warning("LLM response exceeded SLA performance window.")        
 
-        if response.status_code == 200:
-            if not response.text:
-                print("Ollama returned an empty response.")
-                yield json.dumps({"error": f"Service Error {response.status_code}"})
-                return
+        result = response.json()
+        content = result.get("response", "")
+        print(f"--- [DEBUG] FULL RAW CONTENT ---\n{content}\n---")
+
+        # 1. PRIMARY STRATEGY: REGEX EXTRACTION
+        # This prevents the "overwriting keys" bug by finding every {} block individually
+        # It looks for anything that looks like a step object.
+        step_pattern = r'\{[^{}]*"step":\s*".*?"[^{}]*"time_allocated":\s*\d+[^{}]*\}'
+        matches = re.findall(step_pattern, content, re.DOTALL)
+
+        if matches:
+            valid_steps = []
+            print(f"--- [DEBUG] REGEX FOUND {len(matches)} STEPS ---")
+            for m in matches:
+                try:
+                    step_obj = json.loads(m)
+                    if context:
+                        overlap_check = set(step_obj['step'].lower().split()) & set(context.lower().split())
+                        if len(overlap_check) < 2:
+                            yield {"error":{"code": "ERR_FACTUAL_DIVERGENCE", "severity": "CRITICAL"}, "detail" : f"Step '{step_obj['step']}' not grounded."}
+                            return
+                        
+                    valid_steps.append(step_obj)
+                    yield step_obj
+                except json.JSONDecodeError:
+                    traceback.print_exc()
+                    continue
+            total_allocated = sum(s.get("time_allocated", 0) for s in valid_steps)
+            if abs(total_allocated - total_time) > (total_time * 0.1):
+                print(f"BUDGET_ALARM: Total {total_allocated} vs Expected {total_time}")
+                {"code": "ERR_TEMPORAL_MISMATCH", "severity": "LOW"}
+            return # Exit if regex successfully handled it
+
+        # 2. SECONDARY STRATEGY: STANDARD JSON LOAD
+        # (Fallback if the AI actually followed the "steps": [] format perfectly)
+        try:
+            data = json.loads(content)
+            print(f"--- [DEBUG] RAW JSON DATA: {data} ---")
             
-            for line in response.iter_lines():
-                if line:
-                    chunk = json.loads(line.decode('utf-8'))
-                    token = chunk.get("response", "")
-                    yield token
+            # If it's a dict, try to find the list inside
+            if isinstance(data, dict):
+                steps_list = data.get("steps") or next((v for v in data.values() if isinstance(v, list)), None)
+                if steps_list:
+                    for s in steps_list:
+                        yield s
+                    return
+                else:
+                    # If it's just a single dict and not a list
+                    yield data
+                    return
+            
+            # If it's a direct list
+            if isinstance(data, list):
+                for s in data:
+                    yield s
+                return
 
-        elif response.status_code == 500:
-            print("Ollama server error detected. Restarting server...")
-            subprocess.run(["taskkill", "/F", "/IM", "ollama*"], capture_output=True)
-            subprocess.Popen(["ollama",  "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            error_msg = f"Error: Ollama returned status {response.status_code}"
-            print(error_msg, flush=True)
-            yield error_msg
-    
+        except json.JSONDecodeError as je:
+            traceback.print_exc()
+            print(f"--- [DEBUG] JSON PARSE FAILED: {je} ---")
+            yield {"error": "Failed to parse plan structure"}
+
     except Exception as e:
-        print(f"Planning error: {e}")
-        logger.error(f"Streaming error: {e}")
-        yield json.dumps({"error": "STREAM_FAILURE"})
-    
+        traceback.print_exc()
+        print(f"--- [DEBUG] CRITICAL ERROR: {str(e)} ---")
+        yield {"error": str(e)}
 
 def generate_stream(prompt: str):
     try:
@@ -124,21 +184,30 @@ def generate_stream(prompt: str):
                 "prompt": prompt,
                 "stream": True
             },
-            timeout=180,
+            timeout=1800,
             stream=True
         )
-        for line in response.iter_lines():
-            if line:
-                data = json.loads(line.decode("utf-8"))
-                token = data.get("response", "")
-                #print(repr(token))
-                yield token
+        # Check for HTTP errors immediately
+        response.raise_for_status()
 
-                if data.get("done"):
-                    return
-                
+        for line in response.iter_lines(decode_unicode=True):
+            if line:
+                try:
+                    data = json.loads(line)
+                    token = data.get("response", "")
+                    
+                    # ONLY yield if there is actual content
+                    if token:
+                        #print(repr(token)) # Debugging
+                        yield token
+
+                    if data.get("done"):
+                        return
+
+                except json.JSONDecodeError:
+                    print(f"Skipping malformed line: {line}")
+                    continue
                     
     except Exception as e:
         print("STREAM ERROR:", str(e))
-        yield "[ERROR]"
-    
+        yield f"[ERROR: {str(e)}]"
