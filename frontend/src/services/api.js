@@ -68,6 +68,10 @@ API.interceptors.response.use(
     }
 );
 
+export const dashBoard = {
+    kpi: () => API.get('/system/stats')
+};
+
 export const aiService = {
     // Stream plans
     streamPlan: (task, time_budget, conversationid, mode,  onChunk) => {
