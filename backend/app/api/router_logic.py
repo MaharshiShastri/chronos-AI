@@ -22,12 +22,18 @@ from app.services import chat_service, task_service
 from app.rag.retriever import rag_retriever
 from app.rag.ingestor import ingest_text, get_grounded_context
 from app.services.memory_service import get_memories, add_memory, delete_memory, update_memory, extract_and_save_memories
+from app.utils.analytics import analytics_engine
 
 api_router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+failure_logger = logging.getLogger("failure_recorder")
+fh = logging.FileHandler("failure.log")
+fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+failure_logger.addHandler(fh)
 
+#Start of Helper functions
 def get_db():
     db = SessionLocal()
     try:
@@ -35,14 +41,11 @@ def get_db():
     finally:
         db.close()
 
-def get_rag_context(query: str, db: Session):
+def get_rag_context(query: str, db: Session, time: int):
     try:
         cpu_load = psutil.cpu_percent()
-        degraded_mode = cpu_load > 75.0
-        if degraded_mode:
-            print(f"GRACEFUL DEGRADATION: High CPU ({cpu_load}%), bypassing T5.")
 
-        result, metrics = rag_retriever.retrieve_context(query, db, bypass_summarization=degraded_mode)
+        result, metrics = rag_retriever.retrieve_context(query, db, load=cpu_load, total_time=time)
                 
         if not result:
             return ""
@@ -58,10 +61,7 @@ def get_rag_context(query: str, db: Session):
         print(f"RAG RETRIEVAL ERROR: {e}")
     return None
 
-def classify_failure(error_type: str, detail: str = ""):
-    """
-    Standardizes error responses across the system for stress-test auditing.
-    """
+def classify_failure(error_type: str, detail: str=""):
     mapping = {
         # --- IDENTITY & SECURITY ---
         "UNAUTHORIZED_ACCESS": {"code": "ERR_AUTH_403", "severity": "CRITICAL", "retry": False},
@@ -77,13 +77,24 @@ def classify_failure(error_type: str, detail: str = ""):
         "PLAN_GEN_FAILED": {"code": "ERR_STRUCTURAL_INTEGRITY", "severity": "MEDIUM", "retry": True}
     }
     meta = mapping.get(error_type, {"code": "ERR_UNKNOWN", "severity": "UNKNOWN", "retry": False})
+    failure_entry = {
+        "error": error_type,
+        "code" : meta["code"],
+        "detail" : detail,
+        "timestamp" : time.time()
+    }
+    failure_logger.error(json.dumps(failure_entry, indent=4))
     return {"error": meta, "detail": detail, "timestamp": time.time()}
 
 #Retrieve Current user details from token
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     #Recieve the token and check if the ser exists, if user exists, return user details, else return credentials_exception error
-    
-    credentials_exception = JSONResponse(status_code=401, content=classify_failure("UNAUTHORIZED_ACCESS", detail="Unauthorized access to user."))
+
+    credentials_exception = HTTPException(
+        status_code = status.HTTP_401_UNAUTHORIZED,
+        detail = "Could not validate credentials",
+        headers = {"WWW-Authenticate": "Bearer"},
+    )
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -92,13 +103,21 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
             raise credentials_exception
     except JWTError:
         raise credentials_exception
-    
+
     user = db.query(models.User).filter(models.User.email == email).first()
 
     if user is None:
         raise credentials_exception
-    
+
     return user
+
+
+def validate_input(text: str):
+    forbidden_keywords=["IGNORE ALL PREVIOUS INSTRUCTIONS", "SYSTEM_OVERRIDE"]
+    if any (key in text.upper() for key in forbidden_keywords):
+        raise HTTPException(status_code=403, detail="Instruction Injection Detected")
+    
+#End of Helper functions
 
 @api_router.get("/")
 def root():
@@ -129,7 +148,7 @@ def login(request: UserAuth, db: Session = Depends(get_db)):
     #Check if user exists, if not raise HTTPexception, if they do, then match their password and email and provide token if
     # valid credentials and return the token to user's localItem 
     user = db.query(models.User).filter(models.User.email == request.email).first()
-
+    
     if not user or not verify_password(request.password, user.password_hash):
         raise HTTPException(status_code = 401, detail = "Invalid Credentials!")
     
@@ -150,6 +169,14 @@ def chat(request: ChatRequest, db: Session = Depends(get_db), current_user: mode
         db.add(conversation)
         db.commit()
         db.refresh(conversation)
+    
+    try:
+        validate_input(request.message)
+    except Exception as e:
+        return JSONResponse(
+            status_code=403, 
+            content=classify_failure("UNAUTHORIZED_ACCESS", detail=str(e.detail))
+        )
 
         #Save user message
     user_msg = models.Message(
@@ -197,7 +224,10 @@ def get_conversation(conversation_id: int, db: Session = Depends(get_db), curren
         ).first()
     
     if not conversation:
-        raise HTTPException(status_code=403, detail="ACCESS DENIED: Unauthorized Access")
+        return JSONResponse(
+            status_code=403, 
+            content=classify_failure("UNAUTHORIZED_ACCESS", "This conversation belongs to another user profile.")
+        )
     
     messages = db.query(models.Message).filter(
         models.Message.conversation_id == conversation_id,
@@ -228,11 +258,18 @@ async def chat_stream(request: ChatRequest, db: Session = Depends(get_db), curre
         conv_id = new_conv.id
     else:
         conv_id = int(request.conversation_id)
-
+    try:
+        validate_input(request.message)
+    except Exception as e:
+        return JSONResponse(
+            status_code=403, 
+            content=classify_failure("UNAUTHORIZED_ACCESS", detail=str(e.detail))
+        )
+    
     # 2. RETRIEVE CONTEXT 
     # Use the retriever as the single source for RAG context
     try:
-        doc_context = get_rag_context(request.message, db)
+        doc_context = get_rag_context(request.message, db, time=50000)
         #print(doc_context[:10])
         if not doc_context and request.message.startswith("@doc"):
             print(classify_failure("RAG_SILENCE", "Query Explicitly requested docs but not found."))
@@ -329,6 +366,8 @@ def update_title(conversation_id: int, title: str, db: Session = Depends(get_db)
         models.Conversation.user_id == current_user.id,
         models.Conversation.id == conversation_id
     ).first()
+    
+    validate_input(title)
 
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found or access denied")
@@ -338,6 +377,26 @@ def update_title(conversation_id: int, title: str, db: Session = Depends(get_db)
     return {"title": conv.title, "id": conversation_id}
 #END of Ordinary conversations with AI functions below for web-equivalent CRUD operations
 #START of Agentic AI with time-awareness engine conversations with functions below for web-equivalent CRUD operations
+#Read function of web-equivalent method
+@api_router.get("/tasks")
+def get_tasks(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    #Return a list of previously given task to access them
+    return db.query(models.Tasks).filter(models.Tasks.user_id == current_user.id).order_by(models.Tasks.created_at.desc()).all()
+
+#Delete function of web-equivalent
+@api_router.delete("/task/{task_id}")
+def delete_task(task_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    #Delete a task based on task_id recieved from user, if such task does not exist, then return a raise HTTPException
+    task = db.query(models.Tasks).filter(
+        models.Tasks.user_id == current_user.id,
+        models.Tasks.id == task_id
+    ).first()
+    if not task:
+        raise HTTPException(status_code = 404, detail="Task not found or access denied")
+
+    db.delete(task)
+    db.commit()
+    return {"message": "Task deleted successfully!"}
 #Create function of web-equivalent method
 @api_router.post("/plan")
 async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -345,21 +404,42 @@ async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_
     cpu_usage = psutil.cpu_percent()
     ram_usage = psutil.virtual_memory().percent
     
+    try:
+        validate_input(request.task)
+    except Exception as e:
+        return JSONResponse(
+            status_code=403, 
+            content=classify_failure("UNAUTHORIZED_ACCESS", detail=str(e.detail))
+        )
+    
     if cpu_usage > 90 or ram_usage > 95:
         return JSONResponse(status_code=503, content=classify_failure("RESOURCE_STARTVATION", f"CPU: {cpu_usage}%, RAM: {ram_usage}%"))
     
-    async def self_correct_plan(raw_steps, total_budget):
-        actual_sum = sum(step.get("time_allocated", 0) for step in raw_steps)
+    async def validate_and_correct_steps(steps, total_budget):
+        if len(steps) < 5:
+            logger.warning(f"Guardrail Trigerred: Only {len(steps)} steps. Padding Plan")
+            while len(steps) < 5:
+                steps.append({"step": "Additional validation and review", "time_allocated": 0})
+        elif len(steps) > 7:
+            logger.warning(f"Guardrail Triggered: {len(steps)} steps. Compressing plan.")
+            steps = steps[:7]
+        
+        for s in steps:
+            if s.get("time_allocated", 0) <= 0:
+                s["time_allocated"] = total_budget // len(steps)
+
+        actual_sum = sum(step.get("time_allocated", 0) for step in steps)
 
         if actual_sum != total_budget:
             print(f"Correction Triggered: Budget Mismatch({actual_sum} vs {total_budget})")
             diff = total_budget - actual_sum
-            if raw_steps:
-                raw_steps[-1]["time_allocated"] += diff
+            if steps:
+                steps[-1]["time_allocated"] += diff
 
-        return raw_steps
+        return steps
+        
     
-    context = get_rag_context(request.task, db)
+    context = get_rag_context(request.task, db, time=request.time_budget)
     
     try:
         start_time = time.time()
@@ -381,7 +461,7 @@ async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_
 
     if not raw_steps:
         return JSONResponse(status_code=400, content=classify_failure("PLAN_GEN_FAILED", "Generator returned empty sequence."))
-    raw_steps = await self_correct_plan(raw_steps, request.time_budget)
+    raw_steps = await validate_and_correct_steps(raw_steps, request.time_budget)
     # 2. SAVE TO DB (Now we have the full list)
     mission_id, enriched = task_service.create_mission_and_steps(
         db, current_user.id, request.task, request.time_budget, raw_steps
@@ -411,26 +491,6 @@ async def create_execution_plan(request: PlanRequest, db: Session = Depends(get_
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(plan_generator(), media_type="text/event-stream")
-
-#Read function of web-equivalent method
-@api_router.get("/tasks")
-def get_tasks(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    #Return a list of previously given task to access them
-    return db.query(models.Tasks).filter(models.Tasks.user_id == current_user.id).order_by(models.Tasks.created_at.desc()).all()
-#Delete function of web-equivalent
-@api_router.delete("/task/{task_id}")
-def delete_task(task_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    #Delete a task based on task_id recieved from user, if such task does not exist, then return a raise HTTPException
-    task = db.query(models.Tasks).filter(
-        models.Tasks.user_id == current_user.id,
-        models.Tasks.id == task_id
-    ).first()
-    if not task:
-        raise HTTPException(status_code = 404, detail="Task not found or access denied")
-
-    db.delete(task)
-    db.commit()
-    return {"message": "Task deleted successfully!"}
 
 #Update function of web-equivalent
 @api_router.patch("/task/{task_id}")
@@ -505,6 +565,14 @@ async def approve_mission_step(mission_id: int, data: dict, db: Session = Depend
     step_id = str(data.get("step_id"))
     status_to_set = data.get("status", "completed")
     new_content = data.get("content")
+    
+    try:
+        validate_input(new_content)
+    except Exception as e:
+       return JSONResponse(
+        status_code=403, 
+        content=classify_failure("UNAUTHORIZED_ACCESS", detail=str(e.detail))
+    )
 
     # 1. Update the LIVE manifest in memory first
     if mission_id in ACTIVE_MISSIONS:
@@ -542,6 +610,15 @@ def read_memories(db: Session = Depends(get_db), current_user: models.User = Dep
 
 @api_router.post("/memory")
 def add_user_memory(request: MemoryCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    try:
+        validate_input(request.fact_key)
+        validate_input(request.fact_value)
+    except Exception as e:
+        return JSONResponse(
+            status_code=403,
+            content=classify_failure("UNAUTHORIZED_ACCESS", detail=str(e.detail))
+        )
+    
     new_memory = add_memory(
         db,
         user_id = current_user.id,
@@ -562,6 +639,15 @@ def delete_user_memory(memory_id: int, db: Session = Depends(get_db), current_us
 
 @api_router.patch("/memory/{memory_id}")
 def update_user_memory(memory_id: int, updates: MemoryCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    try:
+        validate_input(updates.fact_key)
+        validate_input(updates.fact_value)
+    except Exception as e:
+        return JSONResponse(
+            status_code=403,
+            content=classify_failure("UNAUTHORIZED_ACCESS", detail=str(e.detail))
+        )
+    
     updated_memory = update_memory(
         db,
         user_id = current_user.id,
@@ -599,3 +685,7 @@ async def archive_logs(mission_id: int, data: dict):
         f.write("\n--- END OF SESSION ---\n")
         
     return {"status": "archived", "path": file_path}
+
+@api_router.get("/system/stats")
+def get_stats(current_user: models.User = Depends(get_current_user)):
+    return analytics_engine.get_system_kpis()
