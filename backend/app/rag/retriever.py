@@ -1,5 +1,4 @@
 import time
-import torch
 import numpy as np
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
@@ -11,16 +10,22 @@ from app.rag.vector_store import rag_vector_store
 from app.models.models import DocumentChunk, Document
 
 class Retriever:
+    _instance = None
+    
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super(Retriever, cls).__new__(cls)
+        return cls._instance
+    
     def __init__(self, k=15, final_k=3, time_threshold_ms=300):
         self.k = k
         self.final_k = final_k
         self.time_threshold_ms = time_threshold_ms  # SLA for retrieval
         
         # Models
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.rerank_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", device=self.device)
+        self.rerank_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
         self.summarizer_tokenizer = AutoTokenizer.from_pretrained('t5-small')
-        self.summarizer_model = AutoModelForSeq2SeqLM.from_pretrained('t5-small').to(self.device)
+        self.summarizer_model = AutoModelForSeq2SeqLM.from_pretrained('t5-small')
 
     def _normalize_distances(self, distances):
         """
@@ -29,7 +34,14 @@ class Retriever:
         """
         return 1 / (1 + np.array(distances))
 
-    def retrieve_context(self, query: str, db: Session, bypass_summarization=False):
+    def retrieve_context(self, query: str, db: Session, bypass_summarization=False, load: float = 76.0, total_time: int = 500):
+        STRICT_THRESHOLD = 0.5
+        if total_time < 300:
+            self.final_k = 1
+            bypass_summarization = True
+        else:
+            self.final_k = 3
+            bypass_summarization = load > 75.0
         start_time = time.perf_counter()
         
         # 1. FAISS Search
@@ -42,7 +54,7 @@ class Retriever:
         
         # Filter indices (Using a similarity threshold rather than raw L2 distance)
         # Threshold 0.3 is a common baseline for 'relatedness' in L2-space
-        valid_hits = [(idx, sim) for idx, sim in zip(indices, similarities) if idx != -1 and sim > 0.3]
+        valid_hits = [(idx, sim) for idx, sim in zip(indices, similarities) if idx != -1 and sim > STRICT_THRESHOLD]
         
         if not valid_hits:
             return ["No direct document matches found. Proceeding with general knowledge."], {"status": "fallback"}
@@ -114,7 +126,7 @@ class Retriever:
         
         prompts = [f"summarize: {b}" for b in bodies]
         
-        inputs = self.summarizer_tokenizer(prompts, return_tensors="pt", padding=True, truncation=True).to(self.device)
+        inputs = self.summarizer_tokenizer(prompts, return_tensors="pt", padding=True, truncation=True)
         
         summary_ids = self.summarizer_model.generate(
             inputs["input_ids"], 
