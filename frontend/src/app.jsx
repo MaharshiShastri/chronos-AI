@@ -4,7 +4,7 @@ import ExecutionView from './components/ExecutionView';
 import {authService, aiService} from './services/api';
 import AuthView from './components/AuthView';
 import ShatterCube from './components/ShatterCube';
-
+import Dashboard from './components/Dashboard';
 function App() {
     const [user, setUser] = useState(null);
     const [view, setView] = useState('auth');
@@ -14,7 +14,7 @@ function App() {
 
     useEffect(() => {
         const token = localStorage.getItem('token');
-        if(token){ triggerTransition('chat'); }
+        if(token){ triggerTransition('dashboard'); }
     }, []);
 
     const handleStartTask = (plan) => {
@@ -27,9 +27,7 @@ function App() {
         setPendingView(targetView);
         setIsTransitioning(true);
     }
-
     const onAnimationEnd = () => {
-        console.log("Animation Ended. Moving to:", pendingView);
         if(pendingView) {
             setView(pendingView);
             setPendingView(null);
@@ -40,31 +38,46 @@ function App() {
     };
 
     const handleLogout = () => {
-        localStorage.removeItem('token');
+        localStorage.clear();
         triggerTransition('auth');
     };
 
     return (
         <div className="min-h-screen w-full flex items-center justify-center bg-[#0f172a] overflow-hidden">
             
-            {/* The Transition Layer: Higher z-index usually handled in CSS */}
+            {/* Transition Overlay */}
             {isTransitioning && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0f172a]">
                     <ShatterCube onComplete={onAnimationEnd} />
                 </div>
             )}
 
-            {/* View Layer: Hidden during transition to prevent flicker */}
+            {/* Main Content */}
             {!isTransitioning && (
                 <>
                     {view === 'auth' && (
-                        <AuthView onAuthSuccess={() => triggerTransition('chat')} />
+                        <AuthView onAuthSuccess={() => triggerTransition('dashboard')} />
+                    )}
+
+                    {/* KPI/Dashboard as the Home Base */}
+                    {view === 'dashboard' && (
+                        <div className="w-full h-full relative">
+                            <Dashboard />
+                            {/* Floating Action Button to enter Chat */}
+                            <button 
+                                onClick={() => triggerTransition('chat')}
+                                className="fixed bottom-8 right-8 bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-full shadow-lg font-bold transition-all hover:scale-105"
+                            >
+                                Start New Mission
+                            </button>
+                        </div>
                     )}
 
                     {view === 'chat' && (
                         <ChatWindow 
                             onPlanGenerated={(plan) => triggerTransition('focus', plan)} 
-                            onLogout={handleLogout} 
+                            onLogout={handleLogout}
+                            onBack={() => triggerTransition('dashboard')} // Added back navigation
                         />
                     )}
 
