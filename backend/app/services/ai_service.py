@@ -38,6 +38,14 @@ def verify_grounding(output: str, context: str) -> float:
 
     return len(overlap) / max(len(out_words), 1)
 
+
+def get_strategy_time(total_time):
+    if total_time < 300:
+        return "COMPRESSED_MODE: Combine tasks, skip deep verification, prioritize speed."
+    elif total_time > 3600:
+        return "DEEP_REASONING: Add validation sub-steps, perform exhaustive search, prioritize accuracy."
+    return "BALANCED_MODE: Output a clear plan with some validation, but keep it concise and actionable."
+
 def generate_response(prompt) -> str:
     try:
         response = requests.post(
@@ -65,17 +73,10 @@ def generate_response(prompt) -> str:
         logger.error(f"Request failed: {e}")
         return {"success": False, "data": None, "error": "REQUEST_TIMEOUT"}
 
-def get_strategy_time(total_time):
-    if total_time < 300:
-        return "COMPRESSED_MODE: Combine tasks, skip deep verification, prioritize speed."
-    elif total_time > 3600:
-        return "DEEP_REASONING: Add validation sub-steps, perform exhaustive search, prioritize accuracy."
-    return "BALANCED_MODE: Output a clear plan with some validation, but keep it concise and actionable."
-
 def generate_plan(task: str, total_time: int, mode: str, context: str=""):
     # Prompt optimized to force a clear, repeatable structure
     prompt = f"""[INST] <<SYS>>
-You are the STRATEGIC_AI_PLANNER. Decompose the objective into multi-step chronological phases.
+You are the STRATEGIC_AI_PLANNER. Decompose the objective into 5-7 chronological steps only.
 GROUND REQUIRMENT: Base steps ONLY on the provided context IF available.
 {f"CONTEXT: {context}" if context else ""}
 STRICT JSON FORMAT:
@@ -127,8 +128,13 @@ GENERATE_SEQUENCE_NOW: [/INST]"""
                     if context:
                         overlap_check = set(step_obj['step'].lower().split()) & set(context.lower().split())
                         if len(overlap_check) < 2:
-                            yield {"error":{"code": "ERR_FACTUAL_DIVERGENCE", "severity": "CRITICAL"}, "detail" : f"Step '{step_obj['step']}' not grounded."}
-                            return
+                            yield {
+                                "step" : step_obj['step'],
+                                "time_allocated" : step_obj['time_allocated'],
+                                "warning" : "LOW_GROUNDING",
+                                "reason" : "Step details not found in provided documents."
+                            }
+                            continue
                         
                     valid_steps.append(step_obj)
                     yield step_obj
