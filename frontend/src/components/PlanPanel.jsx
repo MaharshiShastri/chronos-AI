@@ -9,12 +9,12 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
   const [timeBudget, setTimeBudget] = useState(600);
   const [planMode, setPlanMode] = useState('fast');
   const [liveMetrics, setLiveMetrics] = useState();
+  const [currentStep, setCurrentStep] = useState(0);
+const [timeLeft, setTimeLeft] = useState(0);
+const [totalStepTime, setTotalStepTime] = useState(0);
   // --- EXECUTION DATA STATE ---
   const [activeMissionId, setActiveMissionId] = useState(null);
   const [steps, setSteps] = useState([]);
-  const [currentStep, setCurrentStep] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(0);
-  const [totalStepTime, setTotalStepTime] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [approvalData, setApprovalData] = useState(null);
   const [editableArtifact, setEditableArtifact] = useState("");
@@ -22,8 +22,8 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
 
   // --- 1. THE PLANNING STREAM ---
   const startPlanning = async () => {
-    if (!input.trim()) return;
-    
+     if (!input.trim()) return;
+
     setStatus('planning');
     setSteps(Array(6).fill({ description: "ANALYZING_PHASE...", status: 'ghost' }));
 
@@ -43,7 +43,7 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
           }
           return newSteps;
         });
-        }
+         }
 
         // Handle final DB sync
         if (data.status === 'complete') {
@@ -72,26 +72,39 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
   const initiateProtocol = () => {
     if (!activeMissionId) return;
     setIsPaused(false);
-
+    console.log("Active Mission ID in PlanPanel.jsx:", activeMissionId);
     aiService.executeMission(activeMissionId, (payload) => {
-      switch (payload.event) {
+      let data = payload;
+      if (typeof payload === 'string') {
+        try {
+          // Remove 'data: ' prefix if it exists and parse
+          const clean = payload.replace(/^data:\s*/, '');
+          data = JSON.parse(clean);
+        } catch (e) {
+          console.error("Failed to parse payload string", e);
+          return;
+        }
+      }
+
+      console.log("Processing Event:", data.event);
+      switch (data.event) {
         case "MANIFEST":
-          if (payload.steps && payload.steps.length > 0) {
+          if (data.steps && data.steps.length > 0) {
             // This is the "Truth" from the DB. 
             // It will have all 6 steps, fixing the 1/1 issue instantly.
-            setSteps(payload.steps.map(s => ({
+            setSteps(data.steps.map(s => ({
               id: s.backend_step_id || s.id,
               description: s.description,
               time_allocated: s.time_allocated,
               status: s.status
             })));
-          }
-          break;
+            }
+            break;
         case "STEP_STARTED":
-          const idx = payload.index ?? 0;
-          console.log("MOVING_TO_STEP:", payload.index);
+          const idx = data.index ?? 0;
+          console.log("MOVING_TO_STEP:", data.index);
           setCurrentStep(idx);
-          const duration = payload.steps?.[idx]?.time_allocated || steps[idx]?.time_allocated || 60;
+          const duration = data.steps?.[idx]?.time_allocated || steps[idx]?.time_allocated || 60;
           setTimeLeft(duration);
           setTotalStepTime(duration);
           setIsPaused(false);
@@ -101,19 +114,19 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
         case "REQUIRE_APPROVAL":
           setIsPaused(true);
           setApprovalData({
-            step_id: payload.step_id,
-            index: payload.index,
-            artifact: payload.content?.artifact,
-            estimated: steps[payload.index]?.time_allocated || 0,
-            actual: payload.content?.time_needed || 0,
-            drift: payload.content?.drift || 0
+            step_id: data.step_id || data.backend_step_id, 
+            index: data.index,
+            artifact: data.content?.artifact || "",
+            estimated: steps[data.index]?.time_allocated || 0,
+            actual: data.content?.time_needed || 0,
+            drift: data.content?.drift || 0
           });
-          setEditableArtifact(payload.content?.artifact || "");
+          setEditableArtifact(data.content?.artifact || "");
           break;
 
         case "STEP_COMPLETED":
-          console.log(`Step ${payload.index} verified.`);
-          setSteps(prev => prev.map((s, i) => i === payload.index ? { ...s, status: 'completed' } : s));
+          console.log(`Step ${data.index} verified.`);
+          setSteps(prev => prev.map((s, i) => i === data.index ? { ...s, status: 'completed' } : s));
           setApprovalData(null);
           break;
         
@@ -124,28 +137,29 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
           onMetricsUpdate(prev => ({ ...prev, status: 'STREAMS_READY', progress: 'DONE' }));
           break;
         
-          case "STRATEGIC_INTERRUPT":
+        case "STRATEGIC_INTERRUPT":
           setIsPaused(true);
           setApprovalData({
-            step_id: payload.step_id,
+            step_id: data.step_id,
             type: "CLARIFICATION",
-            reason: payload.reason,
+            reason: data.reason,
             isStrategic: true // Flag to style it differently in the UI
           });
           onMetricsUpdate(prev => ({ ...prev, status: 'AWAITING_CLARIFICATION' }));
           break;
+        
         case "TELEMETRY_PULSE":
-          setLiveMetrics(payload.metrics);
+          setLiveMetrics(data.metrics);
           onMetricsUpdate({
-            latency: payload.metrics.step_latency,
-            interrupts: payload.metrics.interrupt_count,
-            progress: payload.metrics.progress,
+            latency: data.metrics.step_latency,
+            interrupts: data.metrics.interrupt_count,
+            progress: data.metrics.progress,
             status: "EXECUTING"
           });
           break;
       }
     });
-  };
+    };
 
   // Timer Effect
   useEffect(() => {
@@ -157,14 +171,22 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
   }, [status, isPaused, timeLeft]);
 
   const handleApproval = async (decision) => {
+    if (!activeMissionId || !approvalData?.step_id) {
+    console.error("Missing Mission ID or Step ID for approval");
+    return;
+  }
     const finalStatus = decision === 'approve' ? 'completed' : 'refined';
-    await aiService.approveStep(activeMissionId, finalStatus, approvalData.step_id, editableArtifact);
-    setApprovalData(null);
-    setIsPaused(false);
+    try{
+      await aiService.approveStep(activeMissionId, finalStatus, approvalData.step_id, editableArtifact);
+      setApprovalData(null);
+      setIsPaused(false);
+    }catch(err){
+      console.error("Approval failed:", err);
+    }
   };
   const displayTotal = steps.length > 0 ? steps.length : 6;
   const progress = totalStepTime > 0 ? (timeLeft / totalStepTime) * 100 : 0;
-  useEffect(() => {
+   useEffect(() => {
     if(status === "finished"){
       setShowCompletion(true);
       const timer = setTimeout(() => setShowCompletion(false), 3000);
@@ -174,7 +196,7 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
   // --- RENDER LOGIC ---
   return (
     <div className="flex-1 flex flex-col p-6 h-full overflow-hidden min-h-0">
-      {/* SHARED HEADER */}
+       {/* SHARED HEADER */}
       <div className="flex items-center justify-between mb-6 px-2">
         <button onClick={onBack} className="flex items-center gap-2 text-slate-500 hover:text-white transition group">
           <ChevronLeft size={16} className="group-hover:-translate-x-1 transition-transform" />
@@ -183,7 +205,7 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
       </div>
 
       <NeumorphicCard className="flex-1 flex flex-col overflow-hidden min-h-0" inset>
-        
+
         {/* STATE 1: IDLE (Mission Config) */}
         {status === 'idle' && (
           <div className="h-full w-full overflow-y-auto overflow-x-hidden custom-scrollbar animate-in fade-in slide-in-from-bottom-4">
@@ -195,7 +217,6 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
                 </div>
                 <p className="text-[10px] font-mono text-slate-500">READY_FOR_INITIALIZATION</p>
               </div>
-
               <div className="space-y-8 bg-slate-900/40 p-8 rounded-3xl border border-slate-800/50 shadow-2xl">
                 {/* THE TRANSFERED INPUT */}
                 <div className="space-y-2">
@@ -207,7 +228,6 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
                     className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500/50 rounded-2xl p-4 text-sm text-slate-200 outline-none min-h-[120px] resize-none transition-all font-mono"
                   />
                 </div>
-
                 <div className="grid grid-cols-2 gap-8">
                   {/* BUDGET SELECTOR */}
                   <div className="space-y-4">
@@ -252,11 +272,9 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
                   <span className="relative group-hover:text-black transition-colors">Initialize_Strategy_Stream</span>
                 </button>
               </div>
-              <div className='h-12' />
-            </div>
+              </div>
           </div>
         )}
-
         {/* STATE 2: PLANNING (Loading with Preview) */}
         {status === 'planning' && (
           <div className="flex-1 flex flex-col items-center justify-center p-12 min-h-0">
@@ -345,5 +363,4 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate }) => {
     </div>
   );
 };
-
 export default PlanPanel;
