@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { aiService } from '../services/api';
-import { Zap, Trash2, Clock, Target, MessageSquare, Terminal, X } from 'lucide-react';
+import { Zap, Trash2, Clock, Target, MessageSquare, Terminal, X, Play } from 'lucide-react';
 import VaultPanel from './VaultPanel';
 import ChatPanel from './ChatPanel';
 import PlanPanel from './PlanPanel';
@@ -31,6 +31,12 @@ const ChatWindow = ({ onLogout}) => {
         progress: 'IDLE',
         status: 'STREAMS_READY'
     });
+    
+    const stablePlan = useMemo(() => {
+        if (!activePlan) return null;
+        return activePlan;
+    }, [activePlan?.mission_id, activePlan?.steps?.length]);
+
     const validateInput = (text) => {
         if (text.length > 1000) return {valid: false, error: "INPUT_TOO_LONG: Limit is 1000 characters"};
         if(/[<>{}\[\]]/.test(text)) return {valid: false, error: "INVALID_CHARACTERS: Special characters detected."};
@@ -280,6 +286,41 @@ useEffect(() => { fetchMemories(); }, []);
         document.removeEventListener('mousemove', handleResizing);
         document.body.style.userSelect = 'auto';
     };
+
+    const handleRevisitMission = async (missionId) => {
+    // Standard defensive checks for the tasks array
+    if (!tasks || !Array.isArray(tasks)) return;
+
+    try {
+        setLoading(true);
+        const mission = tasks.find(t => Number(t.id) === Number(missionId));
+
+        if (!mission) {
+            console.warn(`MISSION_NOT_FOUND: ${missionId}`);
+            return;
+        }
+
+        // FIX: Added 'mission.steps || []' to prevent the .map() crash
+        const hydratedPlan = {
+            mission_id: missionId,
+            steps: (mission.steps || []).map(s => ({
+                id: s.backend_step_id || s.id,
+                description: s.description,
+                status: s.status, 
+                time_allocated: parseInt(s.time_allocated || 60),
+            })),
+            isResuming: true 
+        };
+
+        setActivePlan(hydratedPlan);
+        setView('plan');
+        
+    } catch (err) {
+        console.error("REENTRY_FAILURE:", err);
+    } finally {
+        setLoading(false);
+    }
+};
     
     return (
         <div className="flex h-screen bg-[#0a0f1a] text-white font-sans overflow-hidden">
@@ -350,15 +391,15 @@ useEffect(() => { fetchMemories(); }, []);
                             />
                         ) : view === 'plan' ? (
                             <PlanPanel 
-                                activePlan={activePlan} 
+                                activePlan={stablePlan} 
                                 loading={loading}
                                 timeBudget={timeBudget}
                                 setTimeBudget={setTimeBudget}
                                 planMode={planMode}
                                 setPlanMode={setPlanMode}
-                                onBack={() => setView('chat')}
+                                onBack={() => {setView('chat'); setActivePlan(null);}}
                                 onRequestPlan={handleMasterInput}
-                                onCompleteExecution={() => setActivePlan(null)} // Returns to original PlanPanel
+                                onCompleteExecution={() => {setActivePlan(null); aiService.getTasks().then(res => setTasks(res.data || []));}} // Returns to original PlanPanel
                                 input={input}
                                 setInput={setInput}
                                 onMetricsUpdate={setLiveMetrics}
@@ -412,13 +453,20 @@ useEffect(() => { fetchMemories(); }, []);
                         tasks.map(t => (
                             <div 
                                 key={t.id} 
-                                className="group p-4 rounded-xl bg-slate-900/40 border border-slate-800/60 hover:border-orange-500/30 transition-all duration-300 relative"
+                                className={`group p-4 rounded-xl transition-all duration-300 relative ${activePlan?.mission_id === t.id ? 'bg-orange-500/10 border-orange-500 shadow-[0_0_15px_rgba(249,115,22,0.1)]' : 'bg-slate-900/40 border-slate-800/60 hover:border-orange-500/30'}`}
                             >
                                 <div className="flex justify-between items-center mb-3">
                                     <span className="text-[8px] font-mono text-slate-600 uppercase tracking-tighter">
                                         ID_{t.id.toString().slice(-2)}
                                     </span>
                                     <div className="flex gap-2">
+                                        <button 
+                                            onClick={() => handleRevisitMission(t.id)}
+                                            className="opacity-0 group-hover:opacity-100 p-2 hover:bg-cyan-500/20 text-slate-500 hover:text-cyan-400 transition-all rounded-lg group/btn"
+                                            title="Resume Mission"
+                                        >
+                                            <Play size={12} className="group-hover/btn:translate-x-0.5 transition-transform" />
+                                        </button>
                                         <button 
                                             onClick={(e) => handleDeleteTask(t.id, e)}
                                             className="opacity-0 group-hover:opacity-100 p-1 text-slate-600 hover:text-red-500 transition-all"
