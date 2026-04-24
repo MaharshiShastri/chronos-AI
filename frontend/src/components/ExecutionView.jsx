@@ -10,14 +10,14 @@ const ExecutionView = ({ plan, onComplete }) => {
   const [totalStepTime, setTotalStepTime] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
-  const [isFinished, setIsFinished] = useState(false); // FIXED: Added missing state
+  const [isFinished, setIsFinished] = useState(false); 
   const [approvalData, setApprovalData] = useState(null);
   const [activeMissionId, setActiveMissionId] = useState(null);
   const [editableArtifact, setEditableArtifact] = useState("");
   const [localSteps, setLocalSteps] = useState([]);
 
   // Sync initial plan steps
-  useEffect(() => {
+  useEffect(() => { 
     const initialSteps = plan?.enriched_steps || plan?.steps || [];
     if(Array.isArray(initialSteps) && initialSteps.length > 0) {
       setLocalSteps(initialSteps);
@@ -46,68 +46,61 @@ const ExecutionView = ({ plan, onComplete }) => {
 
   // --- MISSION CONTROL ---
   const startMission = () => {
-    if (!activeMissionId) return;
-    setIsExecuting(true);
-    setIsFinished(false);
+  if (!activeMissionId) return;
+  setIsExecuting(true);
+  setIsFinished(false);
 
-    aiService.executeMission(activeMissionId, (payload) => {
-      switch (payload.event) {
-        case "MANIFEST":
-          // Ensure we don't overwrite localSteps with an empty or partial list
-          if(Array.isArray(payload.steps) && payload.steps.length > 0) {
-            setLocalSteps(payload.steps);
-            console.log("Manifest synced from DB:", payload.steps);
-          }
-          break;
+  aiService.executeMission(activeMissionId, (payload) => {
+  console.log("Received Event:", payload.event, payload); // Add this debug log
+  
+  switch (payload.event) {
+    case "MANIFEST":
+      if(payload.steps) setLocalSteps(payload.steps);
+      break;
 
-        case "STEP_STARTED":
-          const idx = payload.index ?? 0;
-          setCurrentStep(idx);
-          // Look for timing in the payload first, then fallback to local state
-          const currentStepData = (payload.steps && payload.steps[idx]) || localSteps[idx];
-          const stepTime = currentStepData?.time_allocated || 60;
-          
-          setTimeLeft(stepTime);
-          setTotalStepTime(stepTime);
-          setIsPaused(false);
-          setApprovalData(null);
-          break;
+    case "STEP_STARTED":
+      const idx = payload.index ?? 0;
+      setCurrentStep(idx);
+      const stepTime = payload.steps?.[idx]?.time_allocated || localSteps[idx]?.time_allocated || 60;
+      setTimeLeft(stepTime);
+      setTotalStepTime(stepTime);
+      setIsPaused(false);
+      break;
+    case "REQUIRE_APPROVAL":
+      setIsPaused(true);
+      setApprovalData({
+        step_id: payload.step_id || payload.backend_step_id,
+        index: payload.index,
+        artifact: payload.content?.artifact,
+        estimated: localSteps[payload.index]?.time_allocated || 0,
+        actual: payload.content?.time_needed || 0,
+        drift: payload.content?.drift || 0
+      });
+      setEditableArtifact(payload.content?.artifact || "");
+      break;
+      
+    case "MISSION_COMPLETED":
+      setIsExecuting(false);
+      setIsFinished(true);
+      break;
 
-        case "REQUIRE_APPROVAL":
-          setIsPaused(true);
-          setApprovalData({
-            step_id: payload.step_id,
-            index: payload.index,
-            artifact: payload.content?.artifact,
-            estimated: allSteps[payload.index]?.time_allocated || 0,
-            actual: payload.content?.time_needed || 0,
-            drift: payload.content?.drift || 0,
-            instructions: payload.instructions
-          });
-          setEditableArtifact(payload.content?.artifact || "");
-          break;
-
-        case "MISSION_COMPLETED":
-          setIsExecuting(false);
-          setIsFinished(true); // FIXED: No longer undefined
-          if (onComplete) {
-             setTimeout(() => onComplete(), 3000);
-          }
-          break;
-        
-        case "ERROR":
-          console.error("Stream Error:", payload.detail);
-          setIsExecuting(false);
-          break;
-      }
-    });
-  };
-
+    case "ERROR":
+      console.error("Execution Error:", payload.detail);
+      setIsExecuting(false);
+      break;
+  }
+});
+  }
   const handleApproval = async (decision) => {
     if (!activeMissionId || !approvalData?.step_id) return;
 
     try {
-      const status = decision === 'approve' ? 'completed' : 'refined';
+      let finalStatus;
+      if (approvalData.type === "CLARIFICATION") {
+        finalStatus = "started"; // This breaks the 'awaiting_clarification' loop
+      } else {
+        finalStatus = decision === 'approve' ? 'completed' : 'refined';
+      }
       await aiService.approveStep(activeMissionId, status, approvalData.step_id, editableArtifact);
       setApprovalData(null);
       setIsPaused(false);
@@ -158,7 +151,6 @@ const ExecutionView = ({ plan, onComplete }) => {
           {allSteps.map((s, idx) => {
             const isCompleted = idx < currentStep || isFinished;
             const isActive = idx === currentStep && !isFinished;
-
             return (
               <div key={idx} className={`p-5 rounded-2xl border transition-all duration-500 ${isActive ? 'bg-slate-800/60 border-cyan-500/50 scale-[1.02]' : 'border-transparent opacity-40'}`}>
                 <div className="flex items-start gap-4">
@@ -186,7 +178,6 @@ const ExecutionView = ({ plan, onComplete }) => {
                              <span className="text-xs font-mono text-amber-500">+{approvalData.drift}s</span>
                            </div>
                         </div>
-
                         <div className="space-y-2">
                           <label className="text-[9px] text-slate-400 uppercase font-black tracking-widest">Edit Artifact Result:</label>
                           <textarea 
@@ -199,7 +190,7 @@ const ExecutionView = ({ plan, onComplete }) => {
                         <div className="flex gap-3 pt-2">
                           <button onClick={() => handleApproval('refine')} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-black rounded-xl uppercase tracking-widest transition-all">Refine</button>
                           <button onClick={() => handleApproval('approve')} className="flex-1 py-4 bg-emerald-500 hover:bg-emerald-400 text-black text-[10px] font-black rounded-xl uppercase tracking-widest transition-all">Approve</button>
-                        </div>
+                        </div> 
                       </div>
                     )}
                   </div>
@@ -211,7 +202,7 @@ const ExecutionView = ({ plan, onComplete }) => {
         </div>
       </NeumorphicCard>
     </div>
-  );
-};
+    );
+  };
 
 export default ExecutionView;
