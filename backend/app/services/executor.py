@@ -12,6 +12,7 @@ def perform_task():
 
 ACTIVE_MISSIONS = {}
 
+            
 async def safe_json_parse(text: str, default: dict) -> dict:
     try:
         clean_text = text.replace("```json", "").replace("```", "").strip()
@@ -21,7 +22,6 @@ async def safe_json_parse(text: str, default: dict) -> dict:
         logger.error(f"LLM payload malformed: {e} | Raw: {text}")
         return default
     
-
 async def evaluate_step_actionability(step_description: str) -> dict:
     prompt = f"""
     Evaluate if the following task step is actionable or ambiguous.
@@ -34,7 +34,15 @@ async def evaluate_step_actionability(step_description: str) -> dict:
     """
     
     try:
-        response_text = await generate_stream(prompt)
+        def sync_consume():
+            full_text = ""
+            # generate_stream is a normal generator, so we use a normal 'for'
+            for chunk in generate_stream(prompt):
+                print("Present inside generate_stream() function")
+                full_text += chunk
+            return full_text
+
+        response_text = await asyncio.to_thread(sync_consume)
         return await safe_json_parse(response_text, {"status": "CLEAR"})
     except asyncio.TimeoutError:
         return {"status": "CLEAR"}
@@ -55,7 +63,7 @@ async def run_mission_retry(step_data, retries=3):
         
     return {"success": False, "error": "MAX_RETRIES_REACHED"}
 
-async def run_mission_stream(mission_id: int, total_budget: int, manifest: list):
+async def run_mission_stream(mission_id: int, total_budget: int, manifest: list, resume_index: int = 0):
     metrics = {
         "steps_completed" : 0,
         "total_tokens" : 0,
@@ -67,12 +75,16 @@ async def run_mission_stream(mission_id: int, total_budget: int, manifest: list)
     
     try:
         for i, step in enumerate(manifest):
+            if step.get('status') in ['STEP_COMPLETED', 'completed']:
+                logger.info(f"Step {i} already finished. Skipping logic entirely.")
+                continue
             elapsed_time = time.time() - start_time
+            # Rebalance manifest based on drift
             manifest = TimeOptimizer.rebalance_manifest(manifest, i-1, float(total_budget), float(elapsed_time))
             strategy = TimeOptimizer.get_execution_strategy(float(total_budget), float(elapsed_time))
 
             if elapsed_time >= total_budget:
-                yield{"event":"MISSION_TERMINATED", "reason" : 'HARD_BUDGET_EXCEEDED'}
+                yield f"data: {json.dumps({'event':'ERROR', 'reason' : 'HARD_BUDGET_EXCEEDED'})}\n\n"
                 return
             
             step_start_marker = time.time()
@@ -81,97 +93,99 @@ async def run_mission_stream(mission_id: int, total_budget: int, manifest: list)
                 if evaluation.get('status').lower() == "ambiguous":
                     metrics["interrupts"] += 1
                     step['status'] = 'awaiting_clarification'
-                    yield {
-                        "event" : "STRATEGIC_INTERRUPT",
-                        "step_id" : step["backend_step_id"],
-                        "reason" : evaluation.get("reason", "Incomplete instructions detected.")
-                    }
+                    yield f"data: {json.dumps({
+                        'event' : 'STRATEGIC_INTERRUPT',
+                        'step_id' : step['backend_step_id'],
+                        'index': i,
+                        'reason' : evaluation.get('reason', 'Incomplete instructions detected.')
+                    })}\n\n"
 
                     wait_time = time.time()
                     while step['status'] == "awaiting_clarification":
                         await asyncio.sleep(1)
                         if(time.time() - wait_time) > 300:
                             step['status'] = "timed_out"
-                            yield {"event" : "TIMEOUT_ABORT", "reason":"No user response for 5 minutes"}
+                            yield f"data: {json.dumps({'event' : 'TIMEOUT_ABORT', 'reason':'No response'})}\n\n"
                             return 
 
-            
-            # 1. Update In-Memory Status
+            step_start_marker = time.time()
             step['status'] = "started"
             
-            yield {
-                "event": "STEP_STARTED",
-                "index": i,
-                "step_id": step['backend_step_id'], # Fixed: matches router + removed extra comma typo
-                "time_remaining": round(max(0, total_budget - (time.time() - start_time)), 2)
-            }
-
-            # 2. Simulation Logic
+            yield f"data: {json.dumps({
+                'event': 'STEP_STARTED',
+                'index': i,
+                'step_id': step['backend_step_id'],
+                'time_remaining': round(max(0, total_budget - (time.time() - start_time)), 2)
+            })}\n\n"
+            # Simulation of work
             allocated_time = step['time_allocated']
             artifact = f"Generated content for: {step['description']}"
-            
-            # 3. Update In-Memory Details
-            step['artifact_content'] = artifact
-            step['status'] = "awaiting_approval"
+            await asyncio.sleep(min(allocated_time, 1.5)) # Small delay for "working" feeling
 
-            await asyncio.sleep(min(allocated_time, 2))
-
+            # Calculate metrics for the artifact
             actual_duration = time.time() - step_start_marker
-            metrics["steps_completed"] += 1
-            yield {
-                "event" : "TELEMETRY_PULSE",
-                "metrics" : {
-                    "step_latency": round(actual_duration * 1000, 2),
-                    "interrupt_count": metrics["interrupts"],
-                    "progress": f"{metrics['steps_completed']}/{len(manifest)}"
-                }
-            }
-            step['actual_duration'] = actual_duration
             drift = actual_duration - allocated_time
             
-            yield {
-                "event": "REQUIRE_APPROVAL",
-                "index": i,
-                "step_id": step['backend_step_id'],
-                "content": {
-                    "artifact": artifact, 
-                    "time_needed": round(actual_duration, 2), 
-                    "drift": round(drift, 2) if drift > 0 else 0
+            # CRITICAL: Update status to block backend
+            step['artifact_content'] = artifact
+            step['status'] = "awaiting_approval"
+            # Send the approval request
+            yield f"data: {json.dumps({
+                'event': 'REQUIRE_APPROVAL',
+                'index': i,
+                'step_id': step['backend_step_id'],
+                'content': {
+                    'artifact': artifact, 
+                    'time_needed': round(actual_duration, 2), 
+                    'drift': round(drift, 2) if drift > 0 else 0
                 },
-                "instructions": "Please approve or provide feedback."
-            }
+                'instructions': 'Please approve or provide feedback.'
+            })}\n\n"
             
-            # 4. THE IN-MEMORY APPROVAL LOOP (No DB polling)
-            approval_window = 60 if strategy == "NORMAL" else 10
+            # --- THE BLOCKING LOOP ---
+            approval_window = 60 if strategy == "NORMAL" else 15
+            approval_start = time.time()
+            
             if strategy == 'EMERGENCY':
                 step['status'] = 'completed'
-                logger.info(f'Auto-approving step {i} due to human inactivity.')
+                logger.info(f"Auto-approving step {i} due to EMERGENCY strategy.")
             else:
-                approval_start = time.time()
+                # This loop keeps the generator alive but "stuck" on this step 
+                # until a PATCH request hits the router to change step['status']
                 while step['status'] == "awaiting_approval":
-                    await asyncio.sleep(1) 
-                    if(time.time() - approval_start) > approval_window:
+                    await asyncio.sleep(0.5) 
+                    if (time.time() - approval_start) > approval_window:
                         step['status'] = 'completed'
-                        logger.info(f'Auto-approving step {i} due to human inactivity.')
+                        metrics["interrupts"] += 1
+                        logger.info(f"Auto-approving step {i} due to timeout.")
                 
-            yield {
-                "event": "STEP_COMPLETED",
-                "index": i,
-                "actual_duration": round(actual_duration, 0)
-            }
+            # Only proceed to STEP_COMPLETED once the loop above is broken
+            metrics["steps_completed"] += 1
+            yield f"data: {json.dumps({
+                'event': 'TELEMETRY_PULSE',
+                'metrics': {
+                    'step_latency': round((time.time() - step_start_marker) * 1000, 2),
+                    'interrupt_count': metrics['interrupts'],
+                    'progress': f'{metrics["steps_completed"]}/{len(manifest)}'
+                }
+            })}\n\n"
+            
+            yield f"data: {json.dumps({
+                'event': 'STEP_COMPLETED',
+                'index': i,
+                'actual_duration': round(time.time() - step_start_marker, 0)
+            })}\n\n"
 
-        # 5. Finalize Mission - This is where the DB is finally touched
-        yield {
-            "event": "MISSION_COMPLETED", 
-            "mission_id": mission_id, 
-            "time_completion": round(time.time() - start_time, 0),
-            "metrics": {
-                "execution_time": f"{round(time.time() - start_time, 2)}s",
-                "interrupt_count": metrics["interrupts"],
+        yield f"data: {json.dumps({
+            'event': 'MISSION_COMPLETED', 
+            'mission_id': mission_id, 
+            'time_completion': round(time.time() - start_time, 0),
+            'metrics': {
+                'execution_time': f'{round(time.time() - start_time, 2)}s',
+                'interrupt_count': metrics['interrupts'],
             }
-        }
+        })}\n\n"
 
     finally:
-        # Cleanup global memory when stream closes or finishes
         if mission_id in ACTIVE_MISSIONS:
             del ACTIVE_MISSIONS[mission_id]
