@@ -18,7 +18,8 @@ const fetchStream = async(endpoint, body, onChunk, method="POST") => {
             "Authorization": `Bearer ${token}`,
         }
     }
-    if(method!=="GET") {options.headers["Content-Type"] = "application/json"; options.body = body ? JSON.stringify(body) : null;}
+    if(method!=="GET") {options.headers["Content-Type"] = "application/json";
+        options.body = body ? JSON.stringify(body) : null;}
     else {options.body = null;}
 
     const response = await fetch(`${API_URL}${endpoint}`, options);
@@ -42,7 +43,7 @@ const fetchStream = async(endpoint, body, onChunk, method="POST") => {
                 try{
                     const jsonString = trimmedLine.replace("data: ", "");
                     const data = JSON.parse(jsonString);
-
+                    console.log(data);
                     onChunk(data);
                     if(data.conversation_id)    localStorage.setItem("current_conv_id", data.conversation_id);
                 } catch(e) {
@@ -73,6 +74,11 @@ export const dashBoard = {
 };
 
 export const aiService = {
+    //unified gateway
+    runAgent: (message, timeBudget, onEvent) => {
+        return fetchStream("/agent/run", {message, time_budget: timeBudget}, onEvent);
+    },
+
     // Stream plans
     streamPlan: (task, time_budget, conversationid, mode,  onChunk) => {
         const id = conversationid ? parseInt(conversationid) : null;
@@ -100,7 +106,6 @@ export const aiService = {
     updateTaskStatus: (taskID, status) => API.patch(`/task/${taskID}`, {status}),
     
     executeMission: (missionId, onEvent) => {
-        console.log("Initializing Stream for Mission:", missionId);
         //const id = conversationId ? parseInt(conversationId) : null;
         return fetchStream(`/execute/${missionId}`, null, onEvent, "GET");
     },
