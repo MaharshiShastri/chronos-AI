@@ -43,6 +43,40 @@ const ChatWindow = ({ onLogout}) => {
         return {valid: true}
     };
 
+    const handleAgentRun = async () => {
+        if(!input.trim()) return;;
+        setLoading(true);
+        const userMsg = {role: 'user', content: input};
+        setMessages(prev => [...prev, userMsg]);
+
+        let aiMsg = {role: 'assistant', content: ''};
+        setMessages(prev => [...prev, aiMsg]);
+
+        try{
+            await aiService.runAgent(input, timeBudget, (event) => {
+                if(event.action === "INITIATE_PLAN"){
+                    setActivePlan({
+                        mission_id: event.mission_id,
+                        steps: event.steps,
+                        meta: event.meta
+                    });
+                    setView('plan');
+                    setLoading(false);
+                } else if(event.token){
+                    aiMsg.content += event.token;
+                    setMessages(prev => [...prev.slice(0, -1), {...aiMsg}]);
+                    if(event.meta?.reasoning){
+                        setLiveMetrics(m => ({...m, status: 'THINKING', reason: event.meta.reasoning}))
+                    }
+                }
+            });
+        } catch(err){
+            console.error('Agent Run Error:', err);
+        } finally{
+            setLoading(false);
+            setInput('');
+        }
+    };
     // 1. Initial Load: Archive and Task Log
     useEffect(() => {
         const initDashboard = async () => {
@@ -383,7 +417,7 @@ useEffect(() => { fetchMemories(); }, []);
                                 messages={messages} 
                                 input={input}
                                 setInput={setInput} 
-                                onSend={handleMasterInput}
+                                onSend={handleAgentRun}
                                 loading={loading}
                                 scrollRef={scrollRef}
                                 memories={memories} 
@@ -391,7 +425,7 @@ useEffect(() => { fetchMemories(); }, []);
                             />
                         ) : view === 'plan' ? (
                             <PlanPanel 
-                                activePlan={stablePlan} 
+                                activePlan={activePlan || stablePlan} 
                                 loading={loading}
                                 timeBudget={timeBudget}
                                 setTimeBudget={setTimeBudget}
