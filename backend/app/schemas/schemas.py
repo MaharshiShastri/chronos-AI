@@ -33,3 +33,13 @@ class MemoryCreate(BaseModel):
     fact_value: str
     importance: Optional[int] = 1   
     category: Optional[str] = "general"
+
+class AgentState(BaseModel):
+    mission_id: Optional[int] = None
+    goal: str
+    current_step_index: int = 0
+    steps: List[Dict[str, Any]] = []
+    memories: List[str] = []
+    tool_outputs: Dict[str, Any] = []
+    critic_feedback: Optional[str] = None
+    status: str = "init" # init | planning | validating | executing | completed
