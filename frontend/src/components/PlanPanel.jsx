@@ -5,7 +5,7 @@ import { aiService } from '../services/api';
 
 const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate, activePlan, onCompleteExecution }) => {
   // --- UI & CONFIG STATE ---
-  const [status, setStatus] = useState('idle'); // 'idle' | 'planning' | 'executing'
+  const [status, setStatus] = useState(activePlan ? 'executing' : 'idle'); // 'idle' | 'planning' | 'executing'
   const [timeBudget, setTimeBudget] = useState(600);
   const [planMode, setPlanMode] = useState('fast');
   const [liveMetrics, setLiveMetrics] = useState();
@@ -14,7 +14,7 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate, activePlan, onCom
   const [totalStepTime, setTotalStepTime] = useState(0);
   // --- EXECUTION DATA STATE ---
   const [activeMissionId, setActiveMissionId] = useState(null);
-  const [steps, setSteps] = useState([]);
+  const [steps, setSteps] = useState(activePlan?.steps || []);
   const [isPaused, setIsPaused] = useState(false);
   const [approvalData, setApprovalData] = useState(null);
   const [editableArtifact, setEditableArtifact] = useState("");
@@ -269,7 +269,8 @@ const PlanPanel = ({ onBack, input, setInput, onMetricsUpdate, activePlan, onCom
                 <label className="text-[10px] font-bold text-slate-500 uppercase ml-2">Objective_Parameters</label>
                 <textarea 
                   value={input} 
-                  onChange={(e) => setInput(e.target.value)} 
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder='Input your task/mission here....' 
                   className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500/50 rounded-2xl p-4 text-sm text-slate-200 outline-none min-h-[120px] resize-none transition-all font-mono shadow-inner"
                 />
               </div>
