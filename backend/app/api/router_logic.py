@@ -689,3 +689,29 @@ async def archive_logs(mission_id: int, data: dict):
 @api_router.get("/system/stats")
 def get_stats(current_user: models.User = Depends(get_current_user)):
     return analytics_engine.get_system_kpis()
+@api_router.post("/agent/run")
+async def agent_gateway(
+    request: ChatRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+    bg_tasks: BackgroundTasks = BackgroundTasks()
+):
+    result = await workflow.route_and_resolve(request.message, db, current_user.id, time_budget=600)
+
+    if result["type"] == "plan":
+        mission_id, enriched = task_service.create_mission_and_steps(db, current_user.id, 600, result["payload"])
+        return {
+            "action": "INITIATE_PLAN",
+            "mission_id": mission_id,
+            "steps": enriched,
+            "meta": result['meta']
+        }
+
+    if result["type"] == "chat":
+        async def stream_response():
+            prompt = result.get("payload", request.message)
+            async with llm_semaphore:
+                for token in generate_stream(prompt):
+                    yield f"data: {json.dumps({'token': token, 'meta': result['meta']})}\n\n"
+
+        return StreamingResponse(stream_response(), media_type="text/event-stream")
