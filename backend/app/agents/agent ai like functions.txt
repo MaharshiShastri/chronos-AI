@@ -1,0 +1,5 @@
+Feature                 Agentic AI Terminology
+generate_plan           Task Decomposition & Reasoning
+time_budget             Resource-Constrained Optimization
+Memory View             Stateful Context Retrieval (RAG)
+Human execution         Human-in-the-Loop (HITL) Orchestration

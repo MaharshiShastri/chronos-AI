@@ -1,0 +1,14 @@
+terminal 1:
+cd "D:\full stack projects\local LLM\backend"
+uvicorn main:app --reload
+
+terminal 2:
+cd "D:\full stack projects\local LLM\backend"
+celery -A app.services.tasks worker -Q chat_queue,plan_queue -c 2 --loglevel=info -P solo
+
+terminal 3:
+redis-server --port 6373
+
+terminal 4:
+cd "D:\full stack projects\local LLM\frontend"
+npm run dev
