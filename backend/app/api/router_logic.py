@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 import asyncio
-import fitz
 
 #Internal import
 from database import SessionLocal
@@ -387,6 +386,7 @@ def update_user_memory(memory_id: int, updates: MemoryCreate, db: Session = Depe
 
 @api_router.post("/upload-doc")
 async def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    import fitz
     contents = await file.read()
     doc = fitz.open(stream=contents, filetype="pdf")
     full_text = "".join(page.get_text() for page in doc)

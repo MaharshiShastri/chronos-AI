@@ -1,14 +1,15 @@
 import os
 from sqlalchemy.orm import Session
 from app.models import models
-from app.rag.chunker import rag_chunker
-from app.rag.vector_store import rag_vector_store
-from app.rag.embedder import rag_embedder
 
 def list_user_documents(db: Session, user_id: int):
     return db.query(models.Document).filter(models.Document.user_id == user_id).all()
 
 def save_and_ingest_document(db: Session, title: str, raw_text: str, user_id: int, file_path: str=None) -> dict:
+    from app.rag.chunker import rag_chunker
+    from app.rag.vector_store import rag_vector_store
+    from app.rag.embedder import rag_embedder
+
     final_path = file_path if file_path else f"/{user_id}/internal/document"
 
     new_doc = models.Document(filename=title, user_id=user_id, file_path=final_path)

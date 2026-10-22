@@ -159,7 +159,20 @@ async def async_execute_mission(task, mission_id: int, total_budget: int, steps:
         # 2. Check Strategy (NORMAL vs EMERGENCY)[cite: 27]
         elapsed = asyncio.get_event_loop().time() - start_time
         strategy = TimeOptimizer.get_execution_strategy(float(total_budget), float(elapsed))
-
+        
+        task.update_state(state="PROGRESS", meta={
+            'event': 'REQUIRE_APPROVAL',
+            'index': i,
+            'step_id': step['backend_step_id'],
+            'content': {
+                'description': step['description'],
+                'time_needed': step['time_allocated'],
+                'drift': elapsed
+            }
+        })
+        
+        await executor.wait_for_approval(step['backend_step_id'])
+        
         # 3. Validation & Pub/Sub Handshake
         val = await executor.validate_input(step)
         if val['status'] == "AMBIGUOUS" and strategy != "EMERGENCY":
